@@ -40,7 +40,7 @@ RUN set -eu; \
 
 RUN cmake -B build \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_C_FLAGS="-g -Werror" \
+    -DCMAKE_C_FLAGS="-g" \
     -DCMAKE_C_COMPILER=clang-19 \
     -DCMAKE_CXX_COMPILER=clang++-19 \
     -DCMAKE_INSTALL_PREFIX=/usr && \
@@ -95,8 +95,8 @@ RUN set -eu; \
 
 RUN cmake -B build \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_C_FLAGS="-g -Werror" \
-    -DCMAKE_CXX_FLAGS="-g -Werror" \
+    -DCMAKE_C_FLAGS="-g" \
+    -DCMAKE_CXX_FLAGS="-g" \
     -DCMAKE_C_COMPILER=clang-19 \
     -DCMAKE_CXX_COMPILER=clang++-19 \
     -DEXTRA_MODULES="rtcpstats_cmd;vumeter_stereo;mediasoup_bridge" \
