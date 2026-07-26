@@ -66,6 +66,85 @@ afterEach(async () => {
 });
 
 describe('TalktomeBridgeOrchestrator', () => {
+  it('re-announces on the keep-alive interval so the bridge registry stays fresh', async () => {
+    const mapping = makeMapping();
+    const harness = makeBridgeHarness({ [ACCOUNT_URI]: mapping });
+    const announcement = {
+      bridgeId: 'bridge-main',
+      name: 'baresipui',
+      platform: 'test',
+      inventory: { host: '127.0.0.1', devices: [] },
+    };
+    const orchestrator = new TalktomeBridgeOrchestrator({
+      enabled: true,
+      bridgeId: 'bridge-main',
+      api: asBridgeApi(harness.api),
+      module: asModule(harness.module),
+      mappings: harness.mappings,
+      announcement,
+      announceIntervalMs: 10_000,
+      heartbeatIntervalMs: 120_000,
+      eventPollIntervalMs: 1_000,
+      eventReconcileIntervalMs: 1_000,
+    });
+    orchestrators.push(orchestrator);
+
+    await orchestrator.initialize();
+    expect(harness.api.announce).toHaveBeenCalledTimes(1);
+    expect(harness.api.announce).toHaveBeenCalledWith(announcement);
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(harness.api.announce).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(harness.api.announce).toHaveBeenCalledTimes(2);
+    expect(harness.api.announce).toHaveBeenLastCalledWith(announcement);
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(harness.api.announce).toHaveBeenCalledTimes(4);
+
+    await orchestrator.stop();
+    harness.api.announce.mockClear();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(harness.api.announce).not.toHaveBeenCalled();
+  });
+
+  it('forwards announce responses so runtime can refresh bridge user ports', async () => {
+    const mapping = makeMapping();
+    const harness = makeBridgeHarness({ [ACCOUNT_URI]: mapping });
+    const announcements: Array<{ revision: string }> = [];
+    const announcement = {
+      bridgeId: 'bridge-main',
+      name: 'baresipui',
+      platform: 'test',
+      inventory: { host: '127.0.0.1', devices: [] },
+    };
+    const orchestrator = new TalktomeBridgeOrchestrator({
+      enabled: true,
+      bridgeId: 'bridge-main',
+      api: asBridgeApi(harness.api),
+      module: asModule(harness.module),
+      mappings: harness.mappings,
+      announcement,
+      announceIntervalMs: 10_000,
+      heartbeatIntervalMs: 120_000,
+      eventPollIntervalMs: 1_000,
+      eventReconcileIntervalMs: 1_000,
+      callbacks: {
+        onAnnouncement: (response) => {
+          announcements.push({ revision: response.config.revision });
+        },
+      },
+    });
+    orchestrators.push(orchestrator);
+
+    await orchestrator.initialize();
+    expect(announcements).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(announcements).toHaveLength(2);
+  });
+
   it('creates one session on the first concurrent call and tears it down only after the last call', async () => {
     const mapping = makeMapping();
     const harness = makeBridgeHarness({ [ACCOUNT_URI]: mapping });
@@ -194,6 +273,48 @@ describe('TalktomeBridgeOrchestrator', () => {
       'session-41',
       'consumer-producer-1',
     );
+  });
+
+  it('keeps retainOnly producers without creating new consumers (talktome v1.1.1 PTT pause)', async () => {
+    const live = makeActiveProducer('producer-live');
+    const retained = {
+      ...makeActiveProducer('producer-retained'),
+      retainOnly: true,
+    };
+    const harness = makeBridgeHarness(
+      { [ACCOUNT_URI]: makeMapping() },
+      [live],
+    );
+    const orchestrator = createOrchestrator(harness);
+    await orchestrator.initialize();
+    await orchestrator.callEstablished(ACCOUNT_URI, 'call-1');
+    await harness.waitForStream('session-41');
+    expect(harness.api.createConsumer).toHaveBeenCalledTimes(1);
+
+    harness.emitEvent(
+      'session-41',
+      event('retained-1', 'new-producer', {
+        peerId: retained.peerId,
+        producerId: retained.producerId,
+        appData: {},
+        retainOnly: true,
+      }),
+    );
+    await flushMicrotasks();
+    expect(harness.api.createConsumer).toHaveBeenCalledTimes(1);
+
+    // After PTT pause, the live producer is retained and must not be torn down
+    // or recreated.
+    harness.setActiveProducers([
+      { ...live, retainOnly: true },
+      retained,
+    ]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushMicrotasks();
+
+    expect(harness.api.createConsumer).toHaveBeenCalledTimes(1);
+    expect(harness.module.removeSource).not.toHaveBeenCalled();
+    expect(orchestrator.getStatus(ACCOUNT_URI)?.consumerCount).toBe(1);
   });
 
   it('applies VAD hold timing, talk state, module mute, and active/live tallies', async () => {

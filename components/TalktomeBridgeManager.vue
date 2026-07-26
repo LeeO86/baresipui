@@ -814,30 +814,32 @@ async function loadConfig() {
 }
 
 function openAdd() {
-  const account = availableAccounts.value[0];
-  if (!account) return;
-  const port = preferredUserPort(userPorts.value);
-  const target = preferredTarget(port);
-  Object.assign(form, {
-    accountUri: account.uri,
-    enabled: true,
-    key: port ? String(port.userId) : '',
-    talktomeUserId: port?.userId ?? 0,
-    targetType: target?.type ?? 'conference',
-    targetId: target?.id ?? 0,
-    pttMode: port?.trigger.mode ?? 'audio-level',
-    thresholdDb: port?.trigger.thresholdDb ?? -45,
-    holdMs: 300,
-    gpi: 1,
-    activeGpo: '',
-    liveGpo: '',
-    mixLocalCallers: true,
-    bitrateBps: 64_000,
-  } satisfies MappingForm);
-  contextKeyTouched.value = false;
-  editAccountUri.value = null;
-  modalError.value = '';
-  modalOpen.value = true;
+  void loadConfig().then(() => {
+    const account = availableAccounts.value[0];
+    if (!account) return;
+    const port = preferredUserPort(userPorts.value);
+    const target = preferredTarget(port);
+    Object.assign(form, {
+      accountUri: account.uri,
+      enabled: true,
+      key: port ? String(port.userId) : '',
+      talktomeUserId: port?.userId ?? 0,
+      targetType: target?.type ?? 'conference',
+      targetId: target?.id ?? 0,
+      pttMode: port?.trigger.mode ?? 'audio-level',
+      thresholdDb: port?.trigger.thresholdDb ?? -45,
+      holdMs: 300,
+      gpi: 1,
+      activeGpo: '',
+      liveGpo: '',
+      mixLocalCallers: true,
+      bitrateBps: 64_000,
+    } satisfies MappingForm);
+    contextKeyTouched.value = false;
+    editAccountUri.value = null;
+    modalError.value = '';
+    modalOpen.value = true;
+  });
 }
 
 function openEdit(accountUri: string, mapping: TalktomeAccountMapping) {
