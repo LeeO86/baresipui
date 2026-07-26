@@ -26,6 +26,7 @@ import {
   type TalktomeTallyUpdate,
 } from './orchestrator';
 import type { BridgeRuntimeConfig, JsonObject } from './types';
+import { buildVirtualBridgeInventory } from './virtual-inventory';
 import { withTalktomeAccountLifecycleLock } from './account-lifecycle-lock';
 
 export interface TalktomeBridgeRuntimeOptions {
@@ -245,10 +246,7 @@ export class TalktomeBridgeRuntime {
           bridgeId: this.options.bridgeId,
           name: this.options.bridgeName || 'baresipui',
           platform: `baresipui-${process.platform}`,
-          inventory: {
-            host: this.options.mediaAnnounceIp,
-            devices: [],
-          },
+          inventory: buildVirtualBridgeInventory(this.options.mediaAnnounceIp),
         },
         callbacks: {
           onStatus: (status) => this.handleOrchestratorStatus(status),
