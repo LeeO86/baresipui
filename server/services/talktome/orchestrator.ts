@@ -2,6 +2,8 @@ import {
   normalizeAccountUri,
   type TalktomeAccountMapping,
 } from '../talktome-bridge-config';
+import { lookup as dnsLookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 import type {
   TalktomeBridgePhase,
   TalktomeBridgeStatus,
@@ -56,6 +58,12 @@ export interface TalktomeBridgeOrchestratorOptions {
   mappings: AccountMappingProvider;
   announcement?: BridgeAnnounceRequest;
   autoProvisionEndpoints?: boolean;
+  /**
+   * How often to re-POST /api/v1/bridge/announce. talktome v1.1.1 marks a
+   * bridge stale after ~45s without a fresh announce; the reference bridge
+   * client refreshes every 10s.
+   */
+  announceIntervalMs?: number;
   heartbeatIntervalMs?: number;
   eventPollIntervalMs?: number;
   eventReconcileIntervalMs?: number;
@@ -110,6 +118,8 @@ interface AccountRuntime {
   updatedAt: number;
 }
 
+/** Matches talktome bridge-client syncManagedBridge interval (v1.1.1). */
+const DEFAULT_ANNOUNCE_INTERVAL_MS = 10_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 10_000;
 const INITIAL_SETUP_RETRY_MS = 2_000;
 const MAX_SETUP_RETRY_MS = 30_000;
@@ -125,12 +135,22 @@ const MAX_SESSION_DELETE_RETRY_MS = 30_000;
  */
 export class TalktomeBridgeOrchestrator {
   private readonly runtimes = new Map<string, AccountRuntime>();
+  private readonly announceIntervalMs: number;
   private readonly heartbeatIntervalMs: number;
+  private announceTimer?: ReturnType<typeof setInterval>;
+  private announceInFlight?: Promise<void>;
   private initialized = false;
   private disposed = false;
 
   constructor(private readonly options: TalktomeBridgeOrchestratorOptions) {
     if (!options.bridgeId.trim()) throw new Error('Talktome bridgeId is required');
+    this.announceIntervalMs = validateInterval(
+      options.announceIntervalMs,
+      DEFAULT_ANNOUNCE_INTERVAL_MS,
+      1_000,
+      60_000,
+      'announce interval',
+    );
     this.heartbeatIntervalMs = validateInterval(
       options.heartbeatIntervalMs,
       DEFAULT_HEARTBEAT_INTERVAL_MS,
@@ -180,9 +200,12 @@ export class TalktomeBridgeOrchestrator {
         }
       }
       this.initialized = true;
+      // talktome v1.1.1 registry liveness is announce-driven (not session SSE).
+      this.startAnnounceKeepAlive();
       return announcement;
     } catch (error) {
       this.initialized = false;
+      this.clearAnnounceKeepAlive();
       throw error;
     }
   }
@@ -435,6 +458,10 @@ export class TalktomeBridgeOrchestrator {
   async stop(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    this.clearAnnounceKeepAlive();
+    if (this.announceInFlight) {
+      await this.announceInFlight.catch(() => undefined);
+    }
     await Promise.all(
       [...this.runtimes.values()].map(async (runtime) => {
         await this.enqueue(runtime, async () => {
@@ -449,6 +476,44 @@ export class TalktomeBridgeOrchestrator {
         await runtime.teardownCompletion;
       }),
     );
+  }
+
+  /**
+   * Keep the bridge registry entry fresh. Session SSE/heartbeat only update
+   * control-session liveness; the admin "Bridge Instances" row goes stale
+   * unless /announce is refreshed within BRIDGE_REGISTRY_STALE_MS (~45s).
+   */
+  private startAnnounceKeepAlive(): void {
+    if (!this.options.announcement || this.disposed) return;
+    this.clearAnnounceKeepAlive();
+    this.announceTimer = setInterval(() => {
+      void this.refreshAnnouncement();
+    }, this.announceIntervalMs);
+    this.announceTimer.unref?.();
+  }
+
+  private clearAnnounceKeepAlive(): void {
+    if (this.announceTimer) clearInterval(this.announceTimer);
+    this.announceTimer = undefined;
+  }
+
+  private async refreshAnnouncement(): Promise<void> {
+    if (this.disposed || !this.options.announcement || this.announceInFlight) {
+      return;
+    }
+    const announcement = this.options.announcement;
+    this.announceInFlight = (async () => {
+      try {
+        await this.options.api.announce(announcement);
+      } catch (error) {
+        this.reportError(error);
+      }
+    })();
+    try {
+      await this.announceInFlight;
+    } finally {
+      this.announceInFlight = undefined;
+    }
   }
 
   private async startRuntime(runtime: AccountRuntime): Promise<void> {
@@ -504,8 +569,9 @@ export class TalktomeBridgeOrchestrator {
         transport.ssrc,
       );
       runtime.producerId = producer.id;
+      const txIp = await resolveMediaEndpointIp(transport.ip);
       await this.options.module.bindTransmit(runtime.mapping.key, {
-        ip: transport.ip,
+        ip: txIp,
         port: transport.port,
         payloadType: transport.payloadType,
         ssrc: transport.ssrc,
@@ -731,9 +797,10 @@ export class TalktomeBridgeOrchestrator {
         ) ?? consumer.rtpParameters.codecs[0];
       if (!opus) throw new Error('Consumer response contains no RTP codec');
       const ssrc = consumer.rtpParameters.encodings[0]?.ssrc;
+      const rxIp = await resolveMediaEndpointIp(consumer.transport.ip);
       await this.options.module.addSource(runtime.mapping.key, {
         producerId,
-        ip: consumer.transport.ip,
+        ip: rxIp,
         port: consumer.transport.port,
         payloadType: opus.payloadType,
         ...(ssrc === undefined ? {} : { ssrc }),
@@ -1710,6 +1777,33 @@ function combinedError(message: string, errors: unknown[]): Error {
   };
   combined.errors = errors;
   return combined;
+}
+
+/**
+ * mediasoup_bridge ctrl_tcp commands take a single IP token. Hostnames that
+ * fail DNS inside the container previously surfaced as opaque
+ * `invalid-tx-endpoint` from the C module.
+ */
+async function resolveMediaEndpointIp(ipOrHost: string): Promise<string> {
+  if (typeof ipOrHost !== 'string' || !ipOrHost.trim()) {
+    throw new Error('Talktome media endpoint address is empty');
+  }
+  const trimmed = ipOrHost.trim();
+  if (isIP(trimmed)) return trimmed;
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+    const inner = trimmed.slice(1, -1);
+    if (isIP(inner)) return inner;
+  }
+  try {
+    const resolved = await dnsLookup(trimmed);
+    return resolved.address;
+  } catch (error) {
+    throw new Error(
+      `Cannot resolve talktome media endpoint "${trimmed}": ${errorMessage(error)}. ` +
+        'Set the talktome server announced/public media address to a routable IP ' +
+        'reachable from this host.',
+    );
+  }
 }
 
 function errorMessage(error: unknown): string {

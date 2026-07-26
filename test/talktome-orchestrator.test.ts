@@ -66,6 +66,49 @@ afterEach(async () => {
 });
 
 describe('TalktomeBridgeOrchestrator', () => {
+  it('re-announces on the keep-alive interval so the bridge registry stays fresh', async () => {
+    const mapping = makeMapping();
+    const harness = makeBridgeHarness({ [ACCOUNT_URI]: mapping });
+    const announcement = {
+      bridgeId: 'bridge-main',
+      name: 'baresipui',
+      platform: 'test',
+      inventory: { host: '127.0.0.1', devices: [] },
+    };
+    const orchestrator = new TalktomeBridgeOrchestrator({
+      enabled: true,
+      bridgeId: 'bridge-main',
+      api: asBridgeApi(harness.api),
+      module: asModule(harness.module),
+      mappings: harness.mappings,
+      announcement,
+      announceIntervalMs: 10_000,
+      heartbeatIntervalMs: 120_000,
+      eventPollIntervalMs: 1_000,
+      eventReconcileIntervalMs: 1_000,
+    });
+    orchestrators.push(orchestrator);
+
+    await orchestrator.initialize();
+    expect(harness.api.announce).toHaveBeenCalledTimes(1);
+    expect(harness.api.announce).toHaveBeenCalledWith(announcement);
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(harness.api.announce).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(harness.api.announce).toHaveBeenCalledTimes(2);
+    expect(harness.api.announce).toHaveBeenLastCalledWith(announcement);
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(harness.api.announce).toHaveBeenCalledTimes(4);
+
+    await orchestrator.stop();
+    harness.api.announce.mockClear();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(harness.api.announce).not.toHaveBeenCalled();
+  });
+
   it('creates one session on the first concurrent call and tears it down only after the last call', async () => {
     const mapping = makeMapping();
     const harness = makeBridgeHarness({ [ACCOUNT_URI]: mapping });

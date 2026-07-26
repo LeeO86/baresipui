@@ -154,7 +154,11 @@ For a short local ctrl_tcp diagnostic, use a temporary Compose override with
 1. Configure the talktome mediasoup worker's `RTC_PORT_RANGE` and
    `announcedIp`. Open that UDP range on the talktome server.
 2. Create a stable bridge ID and announce/register the bridge through the
-   Bridge API.
+   Bridge API. talktome **v1.1.1+** marks a bridge stale after ~45 seconds
+   without a fresh `POST /api/v1/bridge/announce`; this agent re-announces
+   every 10 seconds (same cadence as the official bridge-client). Session
+   SSE/heartbeat keep *sessions* alive, not the registry row in Admin →
+   Status → Bridge Instances.
 3. Store the resulting matching bridge token securely for the app service.
 4. Create one dedicated talktome user per bridged SIP account.
 5. Assign each user as a `user` endpoint of the bridge. With
@@ -490,13 +494,20 @@ diagnostics rather than opening ctrl_tcp to an untrusted network.
   bridge; an API key must have equivalent explicit permission.
 - Confirm the selected conference appears in the endpoint's allowed trigger
   targets.
+- Admin Status shows **Bridge Instances → Stale** when the registry has not
+  received `/announce` within ~45s (talktome v1.1.1). This agent re-announces
+  every 10s while connected; if it still goes stale, check app logs for
+  announce HTTP failures and that only one process owns the bridge ID.
 
 ### Conference hears no caller audio
 
 - Confirm PTT is live; user producers begin paused.
 - Check TX packet/error counters with `ms_bridge_stat`.
 - Verify the talktome server's `RTC_PORT_RANGE`, host firewall, mediasoup
-  `announcedIp`, and Docker-host route to that address.
+  `announcedIp`, and Docker-host route to that address. Hostnames that do not
+  resolve from the baresip container previously failed as
+  `module: invalid-tx-endpoint`; the agent now resolves them first and reports
+  a clearer DNS error.
 - Confirm the payload type and SSRC come from the server response rather than
   a hardcoded value.
 
