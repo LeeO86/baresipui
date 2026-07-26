@@ -164,6 +164,9 @@
           v-model:autoRestartOnJbuf="autoRestartOnJbuf"
           v-model:jbufThreshold="jbufThreshold"
           :jbufDropRate="jbufDropRate"
+          :accounts="accounts"
+          :talktomeBridgeGlobalStatus="talktomeBridgeGlobalStatus"
+          :talktomeBridgeStatuses="talktomeBridgeStatuses"
         />
       </section>
     </main>
@@ -174,7 +177,19 @@
 import { useSocketIO } from '@/composables/useSocketIO';
 
 // Use Socket.IO instead of WebSocket
-const { connected, accounts, contacts, calls, gpioStates, audioMeters, jbufDropRate, sendCommand, toggleGpio } = useSocketIO();
+const {
+  connected,
+  accounts,
+  contacts,
+  calls,
+  gpioStates,
+  audioMeters,
+  talktomeBridgeGlobalStatus,
+  talktomeBridgeStatuses,
+  jbufDropRate,
+  sendCommand,
+  toggleGpio,
+} = useSocketIO();
 
 // --- Jitter-buffer auto-restart settings (persisted in localStorage) ---
 const autoRestartOnJbuf = ref(
