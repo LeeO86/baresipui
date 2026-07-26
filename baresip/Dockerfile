@@ -95,7 +95,7 @@ RUN set -eu; \
 
 RUN cmake -B build \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_C_FLAGS="-g" \
+    -DCMAKE_C_FLAGS="-g -Wno-error=implicit-function-declaration -Wno-error=int-conversion" \
     -DCMAKE_CXX_FLAGS="-g" \
     -DCMAKE_C_COMPILER=clang-19 \
     -DCMAKE_CXX_COMPILER=clang++-19 \
