@@ -43,14 +43,24 @@ Prefer `npm run dev` for pure UI/API work. Use Compose when you need real baresi
 
 ### Upstream feature-request workflow
 
-1. **Compare with upstream** before coding:
+Branch **from upstream `main`**, not from this fork’s `main`, so fork-only files (`.cursor/`, `AGENTS.md`) never appear in the upstream diff.
+
+1. **Ensure upstream remote** and refresh:
+   ```bash
+   git remote add upstream https://github.com/andyweiss/baresipui.git 2>/dev/null || true
+   git fetch upstream main
+   ```
+2. **Compare** (optional):
    ```bash
    diff -ruN "$HOME/upstream/andyweiss-baresipui/server" server | head
-   # or: git -C "$HOME/upstream/andyweiss-baresipui" log --oneline -20
    ```
-2. **Implement on this fork** (`LeeO86/baresipui`) on a `cursor/...` feature branch.
-3. **Verify**: `npm run build` at minimum; exercise the UI when the change is user-facing.
-4. **Open an upstream PR** (fork → parent), not only a PR into this fork’s `main`:
+3. **Start a clean feature branch from upstream**:
+   ```bash
+   git checkout -b cursor/<feature>-25f8 upstream/main
+   ```
+4. **Implement only the feature** (no `.cursor/` or `AGENTS.md` changes).
+5. **Verify**: `npm run build` at minimum; exercise the UI when the change is user-facing.
+6. **Open an upstream PR** (fork head → parent):
    ```bash
    git push -u origin HEAD
    gh pr create \
@@ -60,14 +70,19 @@ Prefer `npm run dev` for pure UI/API work. Use Compose when you need real baresi
      --title "…" \
      --body "…"
    ```
-5. **Feature request without code** (issue only):
+   Before opening, confirm the PR diff has no `.cursor/` or `AGENTS.md`:
+   ```bash
+   gh pr diff --repo andyweiss/baresipui | grep -E '^\+\+\+ .*\.cursor/|^\+\+\+ .*AGENTS\.md' && exit 1 || true
+   ```
+7. **Feature request without code** (issue only):
    ```bash
    gh issue create --repo andyweiss/baresipui --title "…" --body "…"
    ```
-6. For changes that belong in the softphone itself, target `baresip/baresip` (and `baresip/re` if needed) using the checkouts under `$HOME/upstream/`, after confirming the Cursor GitHub App (or your token) has access.
+8. Softphone-level work: target `baresip/baresip` / `baresip/re` via `$HOME/upstream/` checkouts when the GitHub App has access.
 
 ### Notes
 
 - Do not commit secrets: `baresip/config/accounts`, `contacts`, `autoconnect.json`, and `.env` are gitignored.
 - Built-in `ManagePullRequest` targets this fork. Prefer `gh pr create --repo andyweiss/baresipui` for true upstream PRs.
 - Keep PRs focused: one feature or fix per upstream request.
+- Fork `main` may keep the Cursor env; upstream PRs must not.
