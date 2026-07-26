@@ -44,19 +44,34 @@ export async function parseAccountsFile(filePath: string): Promise<AccountFileEn
     const enabled = !trimmed.startsWith('#');
     const accountLine = enabled ? trimmed : trimmed.slice(1).trim();
 
-    // Format: "Name"<sip:user@domain>;param=val;...
-    const match = accountLine.match(/^"([^"]+)"<(sip:[^>]+)>(.*)/);
+    // baresip accepts optional display name and URI params inside <...>:
+    //   <sip:user@host>;auth_pass=...
+    //   <sip:user@host;transport=tls>;auth_pass=...
+    //   "Name"<sip:user@host>;...
+    //   "Name"<sip:user@host;transport=tls>;...
+    const match = accountLine.match(/^(?:"([^"]*)"\s*)?<([^>]+)>(.*)$/);
     if (!match) continue;
 
-    const name = match[1];
-    const uri = match[2];
+    let uri: string;
+    try {
+      uri = accountAor(match[2]);
+    } catch {
+      continue;
+    }
+
     const paramStr = match[3];
+    const uriParamStr = uriParameters(match[2]);
+    const name = match[1]?.trim() || uri.replace(/^sip:/i, '').split('@')[0] || uri;
+    const transport =
+      (extractParam(paramStr, 'transport') as 'udp' | 'tcp' | 'tls' | undefined) ||
+      (extractParam(uriParamStr, 'transport') as 'udp' | 'tcp' | 'tls' | undefined) ||
+      'udp';
 
     entries.push({
       name,
       uri,
       enabled,
-      transport: (extractParam(paramStr, 'transport') as 'udp' | 'tcp' | 'tls') || 'udp',
+      transport,
       auth_pass: extractParam(paramStr, 'auth_pass') || '',
       answermode: (extractParam(paramStr, 'answermode') as 'manual' | 'early' | 'auto') || 'auto',
       regint: parseInt(extractParam(paramStr, 'regint') || '360', 10),
@@ -315,7 +330,9 @@ export class AccountAudioTransaction {
   }
 
   private findTargetLine(accountUri: string): ParsedAccountLine | undefined {
-    const normalized = normalizeAccountUri(accountUri);
+    // uastat / UI supply a bare AOR; match on that regardless of URI params
+    // inside the accounts-file <...> (e.g. ;transport=tls).
+    const normalized = accountAor(accountUri);
     const matches: ParsedAccountLine[] = [];
     for (const span of lineSpans(this.workingContent)) {
       const parsed = parseRawAccountLine(span.line, span.start, span.end);
@@ -345,11 +362,12 @@ function parseRawAccountLine(
 ): ParsedAccountLine | undefined {
   const newline = line.match(/(?:\r\n|\n|\r)$/)?.[0] ?? '';
   const body = newline ? line.slice(0, -newline.length) : line;
-  const match = body.match(/^\s*(?:#\s*)?"[^"]*"<([^>]+)>(.*)$/);
+  // Display name is optional; baresip does not require it.
+  const match = body.match(/^\s*(?:#\s*)?(?:"[^"]*"\s*)?<([^>]+)>(.*)$/);
   if (!match) return undefined;
   let accountUri: string;
   try {
-    accountUri = normalizeAccountUri(match[1]);
+    accountUri = accountAor(match[1]);
   } catch {
     return undefined;
   }
@@ -364,6 +382,19 @@ function parseRawAccountLine(
     parametersStart,
     parametersEnd: body.length,
   };
+}
+
+/** Bare sip:user@host AOR used for accounts-file lookup against uastat URIs. */
+function accountAor(value: string): string {
+  const normalized = normalizeAccountUri(value);
+  const separator = normalized.indexOf(';');
+  return separator === -1 ? normalized : normalized.slice(0, separator);
+}
+
+/** Parameter suffix from inside <sip:user@host;param=...>, as ;param=... */
+function uriParameters(angleUri: string): string {
+  const separator = angleUri.indexOf(';');
+  return separator === -1 ? '' : angleUri.slice(separator);
 }
 
 function lineSpans(
