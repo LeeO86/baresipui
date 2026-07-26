@@ -275,6 +275,48 @@ describe('TalktomeBridgeOrchestrator', () => {
     );
   });
 
+  it('keeps retainOnly producers without creating new consumers (talktome v1.1.1 PTT pause)', async () => {
+    const live = makeActiveProducer('producer-live');
+    const retained = {
+      ...makeActiveProducer('producer-retained'),
+      retainOnly: true,
+    };
+    const harness = makeBridgeHarness(
+      { [ACCOUNT_URI]: makeMapping() },
+      [live],
+    );
+    const orchestrator = createOrchestrator(harness);
+    await orchestrator.initialize();
+    await orchestrator.callEstablished(ACCOUNT_URI, 'call-1');
+    await harness.waitForStream('session-41');
+    expect(harness.api.createConsumer).toHaveBeenCalledTimes(1);
+
+    harness.emitEvent(
+      'session-41',
+      event('retained-1', 'new-producer', {
+        peerId: retained.peerId,
+        producerId: retained.producerId,
+        appData: {},
+        retainOnly: true,
+      }),
+    );
+    await flushMicrotasks();
+    expect(harness.api.createConsumer).toHaveBeenCalledTimes(1);
+
+    // After PTT pause, the live producer is retained and must not be torn down
+    // or recreated.
+    harness.setActiveProducers([
+      { ...live, retainOnly: true },
+      retained,
+    ]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushMicrotasks();
+
+    expect(harness.api.createConsumer).toHaveBeenCalledTimes(1);
+    expect(harness.module.removeSource).not.toHaveBeenCalled();
+    expect(orchestrator.getStatus(ACCOUNT_URI)?.consumerCount).toBe(1);
+  });
+
   it('applies VAD hold timing, talk state, module mute, and active/live tallies', async () => {
     const onTally = vi.fn(async () => undefined);
     const harness = makeBridgeHarness({ [ACCOUNT_URI]: makeMapping() });

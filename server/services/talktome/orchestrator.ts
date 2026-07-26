@@ -688,7 +688,9 @@ export class TalktomeBridgeOrchestrator {
     switch (event.event) {
       case 'new-producer': {
         const producer = producerFromPayload(event.payload);
-        if (producer) await this.ensureConsumer(runtime, producer);
+        if (producer && !producer.retainOnly) {
+          await this.ensureConsumer(runtime, producer);
+        }
         break;
       }
       case 'producer-closed': {
@@ -764,6 +766,10 @@ export class TalktomeBridgeOrchestrator {
     );
 
     for (const producer of activeById.values()) {
+      // talktome v1.1.1: paused talk producers stay in active-producers with
+      // retainOnly so existing consumers survive PTT gaps. Do not create new
+      // consumers for those entries (matches official bridge-client).
+      if (producer.retainOnly) continue;
       try {
         await this.ensureConsumer(runtime, producer);
       } catch (error) {
