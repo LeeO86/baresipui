@@ -1,0 +1,27 @@
+{
+  "name": "BaresipUI Upstream Feature Requests",
+  "install": "bash .cursor/scripts/cloud-agent-install.sh",
+  "start": "bash .cursor/scripts/cloud-agent-start.sh",
+  "repositoryDependencies": [
+    "github.com/andyweiss/baresipui",
+    "github.com/baresip/baresip",
+    "github.com/baresip/re"
+  ],
+  "ports": [
+    {
+      "name": "Nuxt dashboard",
+      "port": 3000
+    },
+    {
+      "name": "Baresip control TCP",
+      "port": 4444
+    }
+  ],
+  "terminals": [
+    {
+      "name": "nuxt-dev",
+      "command": "npm run dev",
+      "description": "Nuxt 3 dashboard on :3000 (HOST=0.0.0.0). Use for UI feature work without Docker."
+    }
+  ]
+}
