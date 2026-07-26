@@ -4,6 +4,46 @@ import { dtmfToGpio, gpioToDtmf } from '~/types';
 import { getBaresipConnection } from './baresip-connection';
 import { recordRegistrationEvent, recordCallStarted, recordCallEnded, recordAlsaError, recordJbufDrop } from './prometheus';
 
+export type BaresipResponseObserver = (
+  response: BaresipCommandResponse,
+) => void | Promise<void>;
+export type BaresipEventObserver = (
+  event: BaresipEvent,
+) => void | Promise<void>;
+
+const responseObservers = new Set<BaresipResponseObserver>();
+const eventObservers = new Set<BaresipEventObserver>();
+
+export function registerBaresipResponseObserver(
+  observer: BaresipResponseObserver,
+): () => void {
+  responseObservers.add(observer);
+  return () => responseObservers.delete(observer);
+}
+
+export function registerBaresipEventObserver(
+  observer: BaresipEventObserver,
+): () => void {
+  eventObservers.add(observer);
+  return () => eventObservers.delete(observer);
+}
+
+function notifyObservers<T>(
+  observers: Set<(value: T) => void | Promise<void>>,
+  value: T,
+  kind: string,
+): void {
+  for (const observer of observers) {
+    try {
+      void Promise.resolve(observer(value)).catch((error) => {
+        console.error(`Baresip ${kind} observer failed:`, error);
+      });
+    } catch (error) {
+      console.error(`Baresip ${kind} observer failed:`, error);
+    }
+  }
+}
+
 // Global queue to serialize auto-connect operations
 let autoConnectQueue: Array<() => void> = [];
 let isProcessingAutoConnect = false;
@@ -73,7 +113,10 @@ export function parseBaresipEventBuffered(buffer: string, stateManager: StateMan
     try {
       const jsonMessage = JSON.parse(messageStr);
       if (jsonMessage.response !== undefined) {
+        // Correlated command promises must resolve only after their response
+        // has been fully applied to state (notably listcalls inventory).
         handleCommandResponse(jsonMessage, stateManager);
+        notifyObservers(responseObservers, jsonMessage, 'response');
       } else if (jsonMessage.event) {
         handleJsonEvent(jsonMessage, stateManager);
       }
@@ -609,7 +652,7 @@ function parseCallsResponse(data: string, stateManager: StateManager, autoReset:
   // Actual baresip v3.16 format:
   // User-Agent: <number>@<sip-domain>
   // --- Active calls (1) ---
-  // > [line 1, id 8fd950528ad2127d]  1:23:38  ESTABLISHED            
+  // > [line 1, id 8fd950528ad2127d]  1:23:38  ESTABLISHED (on hold) sip:peer@example.com
   //
   // Strategy: Last wins for updates - new info overwrites old
   // - listcalls response ADDS/UPDATES calls found (e.g., on UI reconnect)
@@ -617,7 +660,7 @@ function parseCallsResponse(data: string, stateManager: StateManager, autoReset:
   // - Events (CALL_CLOSED) handle call removal in real-time
   
   const activeCallIds: Set<string> = new Set();
-  let foundAnyCall = false;
+  const accountsWithCalls = new Set<string>();
   let currentUserAgent: string | null = null;
   
   for (const line of lines) {
@@ -633,14 +676,19 @@ function parseCallsResponse(data: string, stateManager: StateManager, autoReset:
       continue;
     }
     
-    // Parse call line: > [line 1, id 8fd950528ad2127d]  1:23:38  ESTABLISHED       
-    const callMatch = line.match(/>\s*\[line\s+\d+,\s*id\s+([a-f0-9]+)\]\s+[\d:]+\s+(\w+)\s+(sip:[^@\s]+@[^\s]+)/i);
+    // The current-call marker is optional. Call IDs are opaque and may contain
+    // non-hex characters; the optional "(on hold)" field sits before peer URI.
+    const callMatch = line.match(
+      /^\s*>?\s*\[line\s+\d+\s*,\s*id\s+([^\]]+?)\]\s+\S+\s+([A-Za-z][A-Za-z0-9_-]*)\s*(.*)$/i,
+    );
     if (callMatch) {
-      foundAnyCall = true;
-      
-      const callId = callMatch[1];
+      const callId = callMatch[1].trim();
       const callState = callMatch[2].trim().toUpperCase();
-      const remoteUri = callMatch[3];
+      const details = callMatch[3];
+      const remoteMatch = details.match(/<?(sips?:[^>\s]+)>?/i);
+      if (!callId || !remoteMatch) continue;
+      const remoteUri = remoteMatch[1];
+      const onHold = /\(\s*on\s+hold\s*\)/i.test(details);
       const localUri = currentUserAgent;
       
       if (!localUri) {
@@ -648,6 +696,7 @@ function parseCallsResponse(data: string, stateManager: StateManager, autoReset:
       }
       
       activeCallIds.add(callId);
+      accountsWithCalls.add(localUri.toLowerCase().trim());
       
       // Update account call status
       const account = stateManager.getAccount(localUri);
@@ -685,6 +734,7 @@ function parseCallsResponse(data: string, stateManager: StateManager, autoReset:
         remoteUri,
         peerName: remoteUri.split('@')[0].replace('sip:', ''),
         state: callState === 'ESTABLISHED' ? 'Established' : 'Ringing',
+        onHold,
         direction: existingCall?.direction ?? callDirection,
         startTime: existingCall?.startTime || Date.now(),
         answerTime: callState === 'ESTABLISHED' ? (existingCall?.answerTime || Date.now()) : undefined
@@ -700,12 +750,6 @@ function parseCallsResponse(data: string, stateManager: StateManager, autoReset:
   // Auto-Reset only if explicitly enabled (default: disabled)
   if (autoReset) {
     const allAccounts = stateManager.getAccounts();
-    const accountsWithCalls = new Set<string>();
-    
-    // Track which accounts have calls in this response
-    if (currentUserAgent && foundAnyCall) {
-      accountsWithCalls.add(currentUserAgent.toLowerCase().trim());
-    }
     
     for (const account of allAccounts) {
       const accountUri = String(account.uri || '').toLowerCase().trim();
@@ -775,10 +819,19 @@ function handleVuMeterEvent(jsonEvent: BaresipEvent, stateManager: StateManager,
 
 function handleJsonEvent(jsonEvent: BaresipEvent, stateManager: StateManager): void {
   const timestamp = Date.now();
+  notifyObservers(eventObservers, jsonEvent, 'event');
 
   // Handle VU meter events (high-frequency, skip logging)
   if (jsonEvent.type === 'VU_TX_REPORT' || jsonEvent.type === 'VU_RX_REPORT') {
     handleVuMeterEvent(jsonEvent, stateManager, timestamp);
+    return;
+  }
+  if (
+    jsonEvent.type === 'MODULE' &&
+    jsonEvent.param?.startsWith('mediasoup_bridge,')
+  ) {
+    // Generic observers consume bridge telemetry; avoid logging its 5 Hz
+    // level reports into the ordinary SIP event log.
     return;
   }
 
@@ -1026,15 +1079,26 @@ function handleJsonEvent(jsonEvent: BaresipEvent, stateManager: StateManager): v
             }
           }
           if (activeDigits.length > 0) {
-            // Send each digit as short command (ctrl_tcp patch adds short command fallback)
+            // Select the exact event call under the correlated command lock.
+            // Account selection is ambiguous when an account has parallel calls.
             const commands: Array<{command: string, params?: string}> = [
-              { command: 'uafind', params: uri }
+              { command: 'callfind', params: jsonEvent.id }
             ];
             for (const digit of activeDigits) {
               commands.push({ command: digit });
             }
-            connection.sendCommandSequence(commands);
-            stateManager.addLog('info', 'parser', `Retransmitted ${activeDigits.length} active GPIO states as DTMF on call connect`, uri);
+            void connection.executeCommandSequence(commands).then(() => {
+              stateManager.addLog('info', 'parser', `Retransmitted ${activeDigits.length} active GPIO states as DTMF on call connect`, uri);
+            }).catch((error) => {
+              stateManager.addLog(
+                'error',
+                'parser',
+                `Failed to retransmit active GPIO states on call ${jsonEvent.id}: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+                uri,
+              );
+            });
           }
         }
       }
