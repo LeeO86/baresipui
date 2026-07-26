@@ -10,13 +10,17 @@ This repository (`LeeO86/baresipui`) is a fork of [`andyweiss/baresipui`](https:
 
 ## Cursor Cloud specific instructions
 
-### Environment
+### Environment (fork-only — do not upstream)
+
+`.cursor/` and this `AGENTS.md` are **private to `LeeO86/baresipui`**. Never include them in PRs or patches to `andyweiss/baresipui`.
 
 - Config: `.cursor/environment.json`
 - Install clones upstream repos under `$HOME/upstream/` (override with `UPSTREAM_ROOT`):
   - `andyweiss-baresipui` — upstream UI (primary target for feature requests)
   - `baresip` / `re` — codec / library upstreams when a change spans the softphone
 - After install: `npm run dev` serves the dashboard on `:3000`
+
+**Dashboard alternative:** To keep the env entirely out of git, create a personal/team environment at [Cloud Agents → Environments](https://cursor.com/dashboard/cloud-agents#environments) (multi-repo: this fork + `andyweiss/baresipui`) and omit `.cursor/environment.json` from the repo.
 
 ### Local UI development (no SIP stack)
 
