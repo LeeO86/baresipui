@@ -13,6 +13,124 @@ export interface Account {
   displayName?: string;
 }
 
+export type TalktomeTargetType = 'conference' | 'user';
+export type TalktomePttMode = 'audio-level' | 'external';
+
+export interface TalktomeTarget {
+  type: TalktomeTargetType;
+  id: number;
+}
+
+export interface TalktomePttConfig {
+  mode: TalktomePttMode;
+  thresholdDb: number;
+  holdMs: number;
+  /** Inbound GPIO selected as the external PTT source (1-6). */
+  gpi: number;
+}
+
+export interface TalktomeTallyConfig {
+  activeGpo?: number;
+  liveGpo?: number;
+}
+
+export interface TalktomeAccountMapping {
+  enabled: boolean;
+  key: string;
+  talktomeUserId: number;
+  target: TalktomeTarget;
+  ptt: TalktomePttConfig;
+  tally: TalktomeTallyConfig;
+  mixLocalCallers: boolean;
+  bitrateBps: number;
+  previousAudioSource: string;
+  previousAudioPlayer: string;
+}
+
+export interface TalktomeBridgeConfig {
+  accounts: Record<string, TalktomeAccountMapping>;
+}
+
+export interface TalktomeAccountMappingInput {
+  enabled?: boolean;
+  key?: string;
+  talktomeUserId: number;
+  target: TalktomeTarget;
+  ptt?: Partial<TalktomePttConfig>;
+  tally?: TalktomeTallyConfig;
+  mixLocalCallers?: boolean;
+  bitrateBps?: number;
+  previousAudioSource?: string;
+  previousAudioPlayer?: string;
+}
+
+export type TalktomeBridgePhase =
+  | 'disabled'
+  | 'idle'
+  | 'starting'
+  | 'connected'
+  | 'degraded'
+  | 'stopping'
+  | 'failed';
+
+export interface TalktomeBridgeStatus {
+  accountUri: string;
+  key: string;
+  phase: TalktomeBridgePhase;
+  activeCallIds: string[];
+  sessionId?: string;
+  producerId?: string;
+  consumerCount: number;
+  pttLive: boolean;
+  pttLocked: boolean;
+  eventTransport: 'sse' | 'poll' | 'disconnected';
+  lastError?: string;
+  updatedAt: number;
+}
+
+export type TalktomeBridgeGlobalPhase =
+  | 'disabled'
+  | 'waiting-baresip'
+  | 'starting'
+  | 'connected'
+  | 'degraded'
+  | 'failed'
+  | 'stopping';
+
+export interface TalktomeBridgeGlobalStatus {
+  enabled: boolean;
+  phase: TalktomeBridgeGlobalPhase;
+  baresipConnected: boolean;
+  serverReachable: boolean;
+  lastError?: string;
+  updatedAt: number;
+}
+
+export interface TalktomeBridgeServerUserPort {
+  id: string;
+  userId: number;
+  label: string;
+  enabled: boolean;
+  trigger: {
+    mode: TalktomePttMode;
+    target: TalktomeTarget | null;
+    thresholdDb: number;
+  };
+  triggerTargets: Array<TalktomeTarget & { name: string }>;
+}
+
+export interface TalktomeBridgeConfigResponse {
+  enabled: boolean;
+  globalStatus: TalktomeBridgeGlobalStatus;
+  mappings: Record<string, TalktomeAccountMapping>;
+  statuses: TalktomeBridgeStatus[];
+  server: {
+    bridgeId: string;
+    revision: string;
+    userPorts: TalktomeBridgeServerUserPort[];
+  } | null;
+}
+
 export interface Contact {
   contact: string;
   name: string;
@@ -37,6 +155,7 @@ export interface CallInfo {
   remoteUri: string;
   peerName?: string;
   state: 'Ringing' | 'Established' | 'Closing';
+  onHold?: boolean;
   direction: 'incoming' | 'outgoing';
   startTime: number;
   answerTime?: number;
