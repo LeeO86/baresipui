@@ -28,14 +28,17 @@ export default defineEventHandler(async (): Promise<TalktomeBridgeConfigResponse
   await manager.load();
   const runtime = getTalktomeBridgeRuntime();
   const globalStatus = stateManager.getTalktomeBridgeGlobalStatus();
+  const server = globalStatus.serverReachable
+    ? (await runtime?.refreshServerConfig()) ??
+      runtime?.getPublicServerConfig() ??
+      null
+    : null;
 
   return {
     enabled: true,
-    globalStatus,
+    globalStatus: stateManager.getTalktomeBridgeGlobalStatus(),
     mappings: manager.getConfig().accounts,
     statuses: stateManager.getTalktomeBridgeStatuses(),
-    server: globalStatus.serverReachable
-      ? runtime?.getPublicServerConfig() ?? null
-      : null,
+    server,
   };
 });

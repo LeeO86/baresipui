@@ -109,6 +109,42 @@ describe('TalktomeBridgeOrchestrator', () => {
     expect(harness.api.announce).not.toHaveBeenCalled();
   });
 
+  it('forwards announce responses so runtime can refresh bridge user ports', async () => {
+    const mapping = makeMapping();
+    const harness = makeBridgeHarness({ [ACCOUNT_URI]: mapping });
+    const announcements: Array<{ revision: string }> = [];
+    const announcement = {
+      bridgeId: 'bridge-main',
+      name: 'baresipui',
+      platform: 'test',
+      inventory: { host: '127.0.0.1', devices: [] },
+    };
+    const orchestrator = new TalktomeBridgeOrchestrator({
+      enabled: true,
+      bridgeId: 'bridge-main',
+      api: asBridgeApi(harness.api),
+      module: asModule(harness.module),
+      mappings: harness.mappings,
+      announcement,
+      announceIntervalMs: 10_000,
+      heartbeatIntervalMs: 120_000,
+      eventPollIntervalMs: 1_000,
+      eventReconcileIntervalMs: 1_000,
+      callbacks: {
+        onAnnouncement: (response) => {
+          announcements.push({ revision: response.config.revision });
+        },
+      },
+    });
+    orchestrators.push(orchestrator);
+
+    await orchestrator.initialize();
+    expect(announcements).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(announcements).toHaveLength(2);
+  });
+
   it('creates one session on the first concurrent call and tears it down only after the last call', async () => {
     const mapping = makeMapping();
     const harness = makeBridgeHarness({ [ACCOUNT_URI]: mapping });

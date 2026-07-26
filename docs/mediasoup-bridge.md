@@ -247,6 +247,12 @@ must permit UDP 40000-40199 from the talktome server. If the Docker host is
 behind another NAT, create a matching one-to-one UDP forwarding rule and set
 `TALKTOME_MEDIA_ANNOUNCE_IP` to an address reachable from talktome.
 
+This is the address of **baresip** (where mediasoup_bridge listens for return
+RTP), as seen from the talktome server — not talktome's own media/announced
+IP. When both stacks share a Docker network, use the **baresip container IP**
+(or a DNS name that resolves to it on that network). Do not use the `app`
+container IP unless RTP is terminated there.
+
 Do not set the media announce value to `0.0.0.0`, a Docker container address,
 or an unroutable private address unless talktome is on that same routed
 network. Carrier-grade NAT and symmetric NAT can rewrite the probe source

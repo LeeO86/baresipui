@@ -253,6 +253,9 @@ export class TalktomeBridgeRuntime {
         callbacks: {
           onStatus: (status) => this.handleOrchestratorStatus(status),
           onTally: (update) => this.handleTally(update),
+          onAnnouncement: (announcement) => {
+            this.remoteConfig = announcement.config;
+          },
           onError: (error, accountUri) => this.reportError(error, accountUri),
         },
       });
@@ -261,6 +264,7 @@ export class TalktomeBridgeRuntime {
       this.client = client;
       this.remoteConfig =
         announcement?.config ??
+        this.remoteConfig ??
         (await client.getConfig(this.options.bridgeId));
       this.orchestrator = orchestrator;
 

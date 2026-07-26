@@ -43,6 +43,9 @@ export interface TalktomeTargetAudioResult {
 export interface TalktomeBridgeOrchestratorCallbacks {
   onStatus?: (status: TalktomeBridgeStatus) => void | Promise<void>;
   onTally?: (update: TalktomeTallyUpdate) => void | Promise<void>;
+  onAnnouncement?: (
+    announcement: BridgeAnnounceResponse,
+  ) => void | Promise<void>;
   onTargetAudioCommand?: (
     accountUri: string,
     command: BridgeTargetAudioCommandPayload,
@@ -179,6 +182,7 @@ export class TalktomeBridgeOrchestrator {
           throw new Error('Announcement bridgeId does not match orchestrator bridgeId');
         }
         announcement = await this.options.api.announce(this.options.announcement);
+        await this.options.callbacks?.onAnnouncement?.(announcement);
       }
 
       const enabledMappings = this.options.mappings.getEnabledAccounts?.() ?? [];
@@ -504,7 +508,8 @@ export class TalktomeBridgeOrchestrator {
     const announcement = this.options.announcement;
     this.announceInFlight = (async () => {
       try {
-        await this.options.api.announce(announcement);
+        const response = await this.options.api.announce(announcement);
+        await this.options.callbacks?.onAnnouncement?.(response);
       } catch (error) {
         this.reportError(error);
       }
