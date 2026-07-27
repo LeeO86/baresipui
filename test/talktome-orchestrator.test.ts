@@ -17,6 +17,11 @@ import {
   makeBridgeHarness,
   makeMapping,
 } from './helpers/talktome';
+import {
+  VIRTUAL_BRIDGE_INPUT_ID,
+  VIRTUAL_BRIDGE_OUTPUT_ID,
+  buildVirtualBridgeInventory,
+} from '~/server/services/talktome/virtual-inventory';
 
 const orchestrators: TalktomeBridgeOrchestrator[] = [];
 
@@ -143,6 +148,101 @@ describe('TalktomeBridgeOrchestrator', () => {
 
     await vi.advanceTimersByTimeAsync(10_000);
     expect(announcements).toHaveLength(2);
+  });
+
+  it('auto-provisions virtual SIP devices so talktome Admin does not report Device missing', async () => {
+    const mapping = makeMapping();
+    const harness = makeBridgeHarness({ [ACCOUNT_URI]: mapping });
+    const stalePort = {
+      id: 'port-41',
+      kind: 'user' as const,
+      userId: 41,
+      feedId: null,
+      label: '41',
+      enabled: true,
+      input: { deviceId: '', leftChannel: 0, rightChannel: 0 },
+      output: { deviceId: 'win-speakers', leftChannel: 1, rightChannel: 2 },
+      trigger: {
+        mode: mapping.ptt.mode,
+        target: { ...mapping.target },
+        thresholdDb: mapping.ptt.thresholdDb,
+      },
+      triggerTargets: [{ ...mapping.target, name: 'Configured target' }],
+      updatedAt: null,
+    };
+    const staleConfig = {
+      bridgeId: 'bridge-main',
+      revision: 'revision-stale-devices',
+      ports: [stalePort],
+    };
+    // initialize() prefers announcement.config over a separate getConfig call.
+    harness.api.announce.mockResolvedValue({
+      bridge: {
+        id: 'bridge-main',
+        name: 'BareSIP-Bridge',
+        platform: 'test',
+        host: '172.19.0.8',
+        inventory: buildVirtualBridgeInventory('172.19.0.8'),
+        connectedAt: '2026-01-01T00:00:00.000Z',
+        lastSeenAt: '2026-01-01T00:00:00.000Z',
+        remoteAddress: null,
+        stale: false,
+      },
+      bridgeToken: 'announced-token',
+      config: staleConfig,
+    });
+    const inventory = buildVirtualBridgeInventory('172.19.0.8');
+    const orchestrator = new TalktomeBridgeOrchestrator({
+      enabled: true,
+      bridgeId: 'bridge-main',
+      api: asBridgeApi(harness.api),
+      module: asModule(harness.module),
+      mappings: harness.mappings,
+      announcement: {
+        bridgeId: 'bridge-main',
+        name: 'BareSIP-Bridge',
+        platform: 'test',
+        inventory,
+      },
+      heartbeatIntervalMs: 120_000,
+      eventPollIntervalMs: 1_000,
+      eventReconcileIntervalMs: 1_000,
+    });
+    orchestrators.push(orchestrator);
+
+    await orchestrator.initialize();
+
+    expect(harness.api.announce).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inventory: expect.objectContaining({
+          host: '172.19.0.8',
+          devices: expect.arrayContaining([
+            expect.objectContaining({
+              id: VIRTUAL_BRIDGE_INPUT_ID,
+              direction: 'input',
+              max_channels: 2,
+            }),
+            expect.objectContaining({
+              id: VIRTUAL_BRIDGE_OUTPUT_ID,
+              direction: 'output',
+              max_channels: 2,
+            }),
+          ]),
+        }),
+      }),
+    );
+    expect(harness.api.putUserEndpoint).toHaveBeenCalledWith(
+      'bridge-main',
+      41,
+      expect.objectContaining({
+        inputDevice: VIRTUAL_BRIDGE_INPUT_ID,
+        inputLeftChannel: 1,
+        inputRightChannel: 2,
+        outputDevice: VIRTUAL_BRIDGE_OUTPUT_ID,
+        outputLeftChannel: 1,
+        outputRightChannel: 2,
+      }),
+    );
   });
 
   it('creates one session on the first concurrent call and tears it down only after the last call', async () => {

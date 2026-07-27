@@ -504,6 +504,11 @@ diagnostics rather than opening ctrl_tcp to an untrusted network.
   received `/announce` within ~45s (talktome v1.1.1). This agent re-announces
   every 10s while connected; if it still goes stale, check app logs for
   announce HTTP failures and that only one process owns the bridge ID.
+- **Device missing** means the bridge inventory does not contain the input /
+  output device IDs assigned to a user endpoint. This agent announces virtual
+  `baresip-sip-tx` / `baresip-sip-rx` devices and, when auto-provision is on,
+  assigns those to mapped endpoints. Restart/reconnect after upgrading so the
+  next announce + provision cycle can clear the warning.
 
 ### Conference hears no caller audio
 

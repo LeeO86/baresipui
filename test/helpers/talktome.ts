@@ -53,8 +53,8 @@ export function makeUserPort(mapping: TalktomeAccountMapping): BridgeUserPort {
     feedId: null,
     label: mapping.key,
     enabled: true,
-    input: { deviceId: 'input-1', leftChannel: 1, rightChannel: 2 },
-    output: { deviceId: 'output-1', leftChannel: 1, rightChannel: 2 },
+    input: { deviceId: 'baresip-sip-tx', leftChannel: 1, rightChannel: 2 },
+    output: { deviceId: 'baresip-sip-rx', leftChannel: 1, rightChannel: 2 },
     trigger: {
       mode: mapping.ptt.mode,
       target: { ...mapping.target },

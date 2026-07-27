@@ -9,6 +9,11 @@ import type {
   TalktomeBridgeStatus,
 } from '~/types';
 import { BridgeEventSubscriber } from './event-stream';
+import {
+  buildVirtualBridgeInventory,
+  usesVirtualBridgeDevices,
+  virtualBridgeDeviceSelection,
+} from './virtual-inventory';
 import type {
   AccountMappingProvider,
   BridgeActiveProducer,
@@ -185,10 +190,11 @@ export class TalktomeBridgeOrchestrator {
         await this.options.callbacks?.onAnnouncement?.(announcement);
       }
 
+      let runtimeConfig =
+        announcement?.config ??
+        (await this.options.api.getConfig(this.options.bridgeId).catch(() => undefined));
       const enabledMappings = this.options.mappings.getEnabledAccounts?.() ?? [];
-      if (enabledMappings.length) {
-        let runtimeConfig =
-          announcement?.config ?? (await this.options.api.getConfig(this.options.bridgeId));
+      if (runtimeConfig && enabledMappings.length) {
         for (const [rawUri, mapping] of enabledMappings) {
           const accountUri = normalizeAccountUri(rawUri);
           try {
@@ -201,6 +207,13 @@ export class TalktomeBridgeOrchestrator {
             this.reportError(error, accountUri);
             this.emitStatus(runtime);
           }
+        }
+      }
+      if (runtimeConfig) {
+        try {
+          await this.normalizeEndpointDevices(runtimeConfig);
+        } catch (error) {
+          this.reportError(error);
         }
       }
       this.initialized = true;
@@ -1462,6 +1475,34 @@ export class TalktomeBridgeOrchestrator {
     }
   }
 
+  /**
+   * Point every user endpoint on this bridge at the announced virtual SIP
+   * devices. Admin "Device missing" is raised for any assigned endpoint whose
+   * device IDs are absent from inventory — including endpoints not yet mapped
+   * in baresipui.
+   */
+  private async normalizeEndpointDevices(
+    config: Awaited<ReturnType<BridgeApi['getConfig']>>,
+  ): Promise<Awaited<ReturnType<BridgeApi['getConfig']>>> {
+    if (this.options.autoProvisionEndpoints === false) return config;
+    let current = config;
+    for (const port of config.ports) {
+      if (port.kind !== 'user' || usesVirtualBridgeDevices(port)) continue;
+      current = await this.options.api.putUserEndpoint(
+        this.options.bridgeId,
+        port.userId,
+        {
+          triggerMode: port.trigger.mode,
+          triggerTargetType: port.trigger.target?.type ?? '',
+          triggerTargetId: port.trigger.target?.id ?? null,
+          triggerThresholdDb: port.trigger.thresholdDb,
+          ...virtualBridgeDeviceSelection(),
+        },
+      );
+    }
+    return current;
+  }
+
   private async ensureEndpoint(
     config: Awaited<ReturnType<BridgeApi['getConfig']>>,
     mapping: TalktomeAccountMapping,
@@ -1469,13 +1510,16 @@ export class TalktomeBridgeOrchestrator {
     const existing = config.ports.find(
       (port) => port.kind === 'user' && port.userId === mapping.talktomeUserId,
     );
-    if (
+    const triggerMatches =
       existing?.kind === 'user' &&
       existing.trigger.mode === mapping.ptt.mode &&
       existing.trigger.thresholdDb === mapping.ptt.thresholdDb &&
       existing.trigger.target?.type === mapping.target.type &&
-      existing.trigger.target?.id === mapping.target.id
-    ) {
+      existing.trigger.target?.id === mapping.target.id;
+    const devicesMatch =
+      existing?.kind === 'user' && usesVirtualBridgeDevices(existing);
+
+    if (triggerMatches && devicesMatch) {
       return config;
     }
     if (this.options.autoProvisionEndpoints === false && !existing) {
@@ -1484,9 +1528,13 @@ export class TalktomeBridgeOrchestrator {
       );
     }
     if (this.options.autoProvisionEndpoints === false) {
-      throw new Error(
-        `Talktome user ${mapping.talktomeUserId} endpoint trigger configuration does not match the account mapping`,
-      );
+      if (!triggerMatches) {
+        throw new Error(
+          `Talktome user ${mapping.talktomeUserId} endpoint trigger configuration does not match the account mapping`,
+        );
+      }
+      // Leave manually chosen devices alone when auto-provision is off.
+      return config;
     }
 
     const update: BridgeUserEndpointUpdate = {
@@ -1494,9 +1542,7 @@ export class TalktomeBridgeOrchestrator {
       triggerTargetType: mapping.target.type,
       triggerTargetId: mapping.target.id,
       triggerThresholdDb: mapping.ptt.thresholdDb,
-      ...(existing?.kind === 'user'
-        ? selectionUpdate(existing.input, existing.output)
-        : {}),
+      ...virtualBridgeDeviceSelection(),
     };
     return this.options.api.putUserEndpoint(
       this.options.bridgeId,
@@ -1730,20 +1776,6 @@ function mappingRequiresRestart(
     previous.ptt.holdMs !== next.ptt.holdMs ||
     previous.ptt.gpi !== next.ptt.gpi
   );
-}
-
-function selectionUpdate(
-  input: { deviceId: string; leftChannel: number; rightChannel: number },
-  output: { deviceId: string; leftChannel: number; rightChannel: number },
-): Partial<BridgeUserEndpointUpdate> {
-  return {
-    inputDevice: input.deviceId,
-    inputLeftChannel: input.leftChannel > 0 ? input.leftChannel : null,
-    inputRightChannel: input.rightChannel > 0 ? input.rightChannel : null,
-    outputDevice: output.deviceId,
-    outputLeftChannel: output.leftChannel > 0 ? output.leftChannel : null,
-    outputRightChannel: output.rightChannel > 0 ? output.rightChannel : null,
-  };
 }
 
 function stringProperty(object: JsonObject, key: string): string | undefined {
