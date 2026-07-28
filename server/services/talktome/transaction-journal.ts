@@ -279,10 +279,11 @@ function validateJournalMapping(
     'previousAudioPlayer',
   ] as const;
   requireAllowedKeys(value, mappingKeys, label);
+  // endpointKind is optional for journals written before feed mappings existed;
+  // missing values are treated as legacy user mappings (same as config normalize).
   for (const key of [
     'enabled',
     'key',
-    'endpointKind',
     'target',
     'ptt',
     'tally',
@@ -294,6 +295,13 @@ function validateJournalMapping(
     if (!Object.prototype.hasOwnProperty.call(value, key)) {
       throw new Error(`${label}.${key} is required`);
     }
+  }
+  if (
+    value.endpointKind !== undefined &&
+    value.endpointKind !== 'user' &&
+    value.endpointKind !== 'feed'
+  ) {
+    throw new Error(`${label}.endpointKind must be user or feed`);
   }
   if (
     value.endpointKind === 'feed' &&

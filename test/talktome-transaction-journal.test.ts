@@ -152,6 +152,60 @@ describe('talktome mapping transaction journal recovery', () => {
     await expect(access(journalPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('recovers a legacy user journal mapping that omits endpointKind', async () => {
+    const { configPath, accountsPath, journalPath } = await makePaths();
+    const mapping = makeMapping({
+      previousAudioSource: 'alsa,original-in',
+      previousAudioPlayer: 'alsa,original-out',
+    });
+    const { endpointKind: _endpointKind, ...legacyMapping } = mapping;
+    const originalAccounts = [
+      '"Studio"<sip:studio@example.com>;audio_source=mediasoup,studio;audio_player=mediasoup,studio',
+      '',
+    ].join('\r\n');
+    await writeFile(accountsPath, originalAccounts, 'utf8');
+    const manager = new TalktomeBridgeConfigManager(configPath);
+    await manager.load();
+    await manager.setAccount(ACCOUNT_URI, mapping);
+    await writeFile(
+      journalPath,
+      `${JSON.stringify({
+        version: 1,
+        operation: 'delete',
+        accountUri: ACCOUNT_URI,
+        previousMapping: legacyMapping,
+        expectedMapping: null,
+        previousAudio: {
+          audioSource: 'mediasoup,studio',
+          audioPlayer: 'mediasoup,studio',
+          audioSourcePresent: true,
+          audioPlayerPresent: true,
+        },
+        expectedAudio: {
+          audioSource: 'alsa,original-in',
+          audioPlayer: 'alsa,original-out',
+          audioSourcePresent: true,
+          audioPlayerPresent: true,
+        },
+      })}\n`,
+      'utf8',
+    );
+
+    await updateAccountAudioDevicesAtomic(accountsPath, ACCOUNT_URI, {
+      audioSource: 'alsa,original-in',
+      audioPlayer: 'alsa,original-out',
+    });
+    await manager.removeAccount(ACCOUNT_URI);
+
+    await expect(
+      recoverTalktomeMappingJournal(manager, accountsPath),
+    ).resolves.toBe(true);
+
+    expect(manager.getAccount(ACCOUNT_URI)).toEqual(mapping);
+    expect(await readFile(accountsPath, 'utf8')).toBe(originalAccounts);
+    await expect(access(journalPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('retains divergent operator audio and the journal without changing either persisted file', async () => {
     const { configPath, accountsPath, journalPath } = await makePaths();
     await writeFile(
