@@ -292,6 +292,24 @@ When an account is enabled, its audio devices become
 `audio_player` values so disabling or removing the mapping can restore the
 normal device. Do not manually assign a normal account to a mediasoup device.
 
+### Headless hosts without ALSA
+
+The shared `baresip/config/config` keeps ALSA enabled for normal studio
+deployments (`audio_*` defaults and `module alsa.so`). On a mediasoup-only
+host with no sound card, leave mapped accounts on `mediasoup,<key>` and
+**comment out the ALSA driver module** in the mounted baresip config so
+incoming-call alert tones cannot open `alsa,default`:
+
+```text
+# Audio driver Modules
+#module                  alsa.so
+```
+
+Restart baresip after changing the module line. Do not commit that change if
+other deployments still need ALSA. With `alsa.so` loaded and no card present,
+baresip logs errors such as `could not open auplay device 'default'` when the
+menu tries to play ring/alert tones.
+
 Inside the patched core, each source/player allocation appends a lowercase
 64-character SHA-256 token derived from the complete SIP Call-ID. The raw
 Call-ID is never embedded in a device string or passed to the module. The
@@ -548,6 +566,28 @@ diagnostics rather than opening ctrl_tcp to an untrusted network.
   type, or SSRC.
 - Confirm the consumer is resumed only after the module reserves its port and
   sends the comedia probe.
+
+### Incoming calls try to open `alsa,default`
+
+On hosts without a sound card, an incoming SIP call can log:
+
+```text
+alsa: could not open auplay device 'default'
+play: could not start auplay alsa/default
+```
+
+That path is the menu ringtone / alert tone using the global `audio_alert`
+device, not mediasoup call media. Comment out the ALSA module in the mounted
+baresip config (see [Headless hosts without ALSA](#headless-hosts-without-alsa)):
+
+```text
+# Audio driver Modules
+#module                  alsa.so
+```
+
+Then restart baresip. If ALSA errors continue **after** the call is accepted,
+the account is not on a mediasoup device yet — enable the mapping in the UI so
+`audio_source` / `audio_player` become `mediasoup,<key>`.
 
 ### Sources fail as conferences grow
 
