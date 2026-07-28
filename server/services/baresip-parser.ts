@@ -131,10 +131,23 @@ export function parseBaresipEventBuffered(buffer: string, stateManager: StateMan
 function handleCommandResponse(response: BaresipCommandResponse, stateManager: StateManager): void {
   const timestamp = Date.now();
 
+  // Successful correlated commands with empty payloads (e.g. DTMF after callfind)
+  // are already delivered to their waiters; nothing remains to parse.
+  if (
+    response.ok &&
+    response.token &&
+    (response.data === undefined ||
+      response.data === null ||
+      response.data === '')
+  ) {
+    return;
+  }
+
   //  Dispatch-Logic for different response types
   if (typeof response.data === 'string') {
     const data = response.data;
-    
+    const trimmed = data.trim();
+
     // Check if this is getrtcpstats JSON response
     if (data.includes('call_id') && data.startsWith('[')) {
       try {
@@ -143,6 +156,34 @@ function handleCommandResponse(response: BaresipCommandResponse, stateManager: S
       } catch (e) {
         // Silently ignore parse errors
       }
+    }
+
+    // mediasoup_bridge module command JSON (ms_ctx_* / ms_bridge_* / ms_src_*)
+    if (trimmed.startsWith('{') && trimmed.includes('"key"')) {
+      try {
+        const payload = JSON.parse(trimmed) as unknown;
+        if (isMediasoupBridgeCommandPayload(payload)) {
+          parseMediasoupBridgeCommandResponse(payload, stateManager);
+          return;
+        }
+      } catch {
+        // Fall through to other handlers / unhandled warning.
+      }
+    }
+
+    // Dynamic module load acknowledgement used by the talktome bridge plugin.
+    if (/^loaded module\b/i.test(trimmed)) {
+      stateManager.addLog('info', 'tcp-socket', trimmed);
+      return;
+    }
+
+    // callfind / call-selection text used before DTMF GPIO and tally digits.
+    if (
+      /^ua:\s*sip:/im.test(trimmed) ||
+      /^call uri:/im.test(trimmed) ||
+      /^setting current call:/im.test(trimmed)
+    ) {
+      return;
     }
     
     // 1. System Info
@@ -189,6 +230,176 @@ function handleCommandResponse(response: BaresipCommandResponse, stateManager: S
   stateManager.addLog('warn', 'tcp-socket', `Unhandled Command Response: ${responseText}`, undefined, response);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * mediasoup_bridge ctrl_tcp commands always return a JSON object with `key`.
+ * Discriminate on the stable fields emitted by commands.c.
+ */
+function isMediasoupBridgeCommandPayload(
+  value: unknown,
+): value is Record<string, unknown> {
+  if (!isRecord(value) || typeof value.key !== 'string' || !value.key) {
+    return false;
+  }
+  if (typeof value.error === 'string') return true;
+  if (value.tx === 'configured') return true;
+  if (isRecord(value.tx) && 'packets' in value.tx) return true;
+  if (typeof value.mixMode === 'string') return true;
+  if (typeof value.muted === 'boolean') return true;
+  if (typeof value.producerId === 'string') return true;
+  if (typeof value.created === 'boolean') return true;
+  if (
+    value.state === 'open' ||
+    value.state === 'closed' ||
+    value.state === 'active' ||
+    value.state === 'removed'
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function parseMediasoupBridgeCommandResponse(
+  payload: Record<string, unknown>,
+  stateManager: StateManager,
+): void {
+  const key = String(payload.key);
+  if (typeof payload.error === 'string' && payload.error) {
+    stateManager.addLog(
+      'warn',
+      'mediasoup-bridge',
+      `mediasoup ${key}: ${payload.error}`,
+      undefined,
+      payload,
+    );
+    return;
+  }
+
+  // Periodic ms_bridge_stat replies are high-frequency; keep a compact debug
+  // line and omit the full payload so Socket.IO logBatch does not rebroadcast
+  // large JSON objects every poll interval.
+  if (isRecord(payload.tx) && 'packets' in payload.tx) {
+    const tx = payload.tx;
+    const packets = typeof tx.packets === 'number' ? tx.packets : '?';
+    const level =
+      typeof tx.levelDbfs === 'number' ? `${tx.levelDbfs.toFixed(1)} dBFS` : '?';
+    const muted = tx.muted === true ? ' muted' : '';
+    const calls = typeof payload.calls === 'number' ? payload.calls : '?';
+    const rx =
+      typeof payload.rxSourceCount === 'number' ? payload.rxSourceCount : '?';
+    stateManager.addLog(
+      'debug',
+      'mediasoup-bridge',
+      `mediasoup ${key}: stat calls=${calls} tx_packets=${packets} level=${level}${muted} rx_sources=${rx}`,
+    );
+    return;
+  }
+
+  if (payload.tx === 'configured') {
+    const localPort =
+      typeof payload.localPort === 'number' ? payload.localPort : '?';
+    stateManager.addLog(
+      'info',
+      'mediasoup-bridge',
+      `mediasoup ${key}: tx configured localPort=${localPort}`,
+      undefined,
+      payload,
+    );
+    return;
+  }
+
+  if (typeof payload.muted === 'boolean') {
+    stateManager.addLog(
+      'info',
+      'mediasoup-bridge',
+      `mediasoup ${key}: tx ${payload.muted ? 'muted' : 'unmuted'}`,
+      undefined,
+      payload,
+    );
+    return;
+  }
+
+  if (typeof payload.mixMode === 'string') {
+    const bitrate =
+      typeof payload.bitrateBps === 'number' ? payload.bitrateBps : '?';
+    stateManager.addLog(
+      'info',
+      'mediasoup-bridge',
+      `mediasoup ${key}: config mixMode=${payload.mixMode} bitrateBps=${bitrate}`,
+      undefined,
+      payload,
+    );
+    return;
+  }
+
+  if (typeof payload.producerId === 'string') {
+    const producerId = payload.producerId;
+    const state =
+      typeof payload.state === 'string' ? payload.state : undefined;
+    const localRecvPort =
+      typeof payload.localRecvPort === 'number'
+        ? payload.localRecvPort
+        : undefined;
+    if (state === 'removed') {
+      stateManager.addLog(
+        'info',
+        'mediasoup-bridge',
+        `mediasoup ${key}: source ${producerId} removed`,
+        undefined,
+        payload,
+      );
+      return;
+    }
+    if (state === 'active') {
+      stateManager.addLog(
+        'info',
+        'mediasoup-bridge',
+        `mediasoup ${key}: source ${producerId} active` +
+          (localRecvPort !== undefined ? ` recvPort=${localRecvPort}` : ''),
+        undefined,
+        payload,
+      );
+      return;
+    }
+    stateManager.addLog(
+      'info',
+      'mediasoup-bridge',
+      `mediasoup ${key}: source ${producerId} reserved` +
+        (localRecvPort !== undefined ? ` recvPort=${localRecvPort}` : ''),
+      undefined,
+      payload,
+    );
+    return;
+  }
+
+  if (payload.state === 'open' || payload.state === 'closed') {
+    const created =
+      typeof payload.created === 'boolean'
+        ? payload.created
+          ? ' created'
+          : ' reused'
+        : '';
+    stateManager.addLog(
+      'info',
+      'mediasoup-bridge',
+      `mediasoup ${key}: context ${payload.state}${created}`,
+      undefined,
+      payload,
+    );
+    return;
+  }
+
+  stateManager.addLog(
+    'info',
+    'mediasoup-bridge',
+    `mediasoup ${key}: ok`,
+    undefined,
+    payload,
+  );
+}
 
 // ************ System Info response Parser ************
 function parseSysinfoResponse(response: BaresipCommandResponse, stateManager: StateManager, timestamp: number): void {
