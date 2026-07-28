@@ -97,12 +97,14 @@ receives no API credentials.
 | `TALKTOME_BRIDGE_COMMAND_TIMEOUT_MS` | `5000` | No | ctrl_tcp module-command timeout in milliseconds; valid range is `100`–`120000`. |
 | `TALKTOME_DEFAULT_AUDIO_SOURCE` | empty | No | Source restored if an account has no recorded previous non-bridge source. |
 | `TALKTOME_DEFAULT_AUDIO_PLAYER` | empty | No | Player restored if an account has no recorded previous non-bridge player. |
+| `BARESIP_DISABLE_ALERT_TONES` | `false` | No | Baresip-only. When `true`, the entrypoint silences ring/alert tones at runtime so headless hosts do not open `alsa,default` for incoming-call alerts. Does not change the bind-mounted config file. |
 
 The compose files pass every connection setting and secret only to `app` and
 explicitly default the global gate to `false`. They derive the browser-safe
 `NUXT_PUBLIC_TALKTOME_BRIDGE_ENABLED` override from that same value and pass
-only the non-secret gate to `baresip`, solely so Compose detects gate changes
-and recreates the process that may contain a dynamically loaded module.
+the non-secret gate to `baresip` so Compose detects gate changes and recreates
+the process that may contain a dynamically loaded module. Optionally set
+`BARESIP_DISABLE_ALERT_TONES=true` on headless / mediasoup-only hosts.
 Configure the four required connection values before setting the gate to
 `true`. A partially configured enabled deployment fails the bridge plugin
 closed.
@@ -548,6 +550,43 @@ diagnostics rather than opening ctrl_tcp to an untrusted network.
   type, or SSRC.
 - Confirm the consumer is resumed only after the module reserves its port and
   sends the comedia probe.
+
+### Incoming calls try to open `alsa,default`
+
+On hosts without a sound card, an incoming SIP call can log:
+
+```text
+alsa: could not open auplay device 'default'
+play: could not start auplay alsa/default
+```
+
+That path is the **menu ringtone / alert tone** (`audio_alert`), not the
+mediasoup call media path. The shared `baresip/config/config` still defaults
+to `alsa,default` so normal ALSA deployments keep working.
+
+For headless / mediasoup-only instances, set on the `baresip` service:
+
+```bash
+BARESIP_DISABLE_ALERT_TONES=true
+```
+
+Rebuild/recreate the baresip container so the entrypoint can apply a runtime
+config that sets `ring_aufile` (and related tones) to `none` without modifying
+the bind-mounted config file. Call media for mapped accounts still uses
+`mediasoup,<key>` from the accounts file.
+
+Without rebuilding, you can also set locally in the mounted config (do not
+commit if you still need ALSA rings elsewhere):
+
+```text
+ring_aufile            none
+ringback_aufile        none
+callwaiting_aufile     none
+```
+
+If ALSA errors continue **after** the call is accepted, the account is not on
+a mediasoup device yet — enable the mapping in the UI so
+`audio_source` / `audio_player` become `mediasoup,<key>`.
 
 ### Sources fail as conferences grow
 

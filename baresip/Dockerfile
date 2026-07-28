@@ -140,15 +140,9 @@ WORKDIR /root
 USER root
 ENV USER=root
 
-RUN echo '#!/usr/bin/env bash\n\
-set -e\n\
-\n\
-if [ "$1" = "baresip" ]; then\n\
-    # Start baresip with User-Agent, SIP trace and verbose debug\n\
-    /usr/bin/baresip -a "Baresip AWAH" -s -v "$@"\n\
-else\n\
-    exec "$@"\n\
-fi' > /entrypoint.sh && chmod +x /entrypoint.sh
+COPY docker-entrypoint.sh /entrypoint.sh
+COPY scripts/disable-alert-tones.sh /usr/local/lib/baresipui/disable-alert-tones.sh
+RUN chmod +x /entrypoint.sh /usr/local/lib/baresipui/disable-alert-tones.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["baresip"]

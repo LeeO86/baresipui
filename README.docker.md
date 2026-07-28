@@ -269,16 +269,16 @@ docker compose -f compose.build-from-source.yaml up -d
 | `TALKTOME_BRIDGE_COMMAND_TIMEOUT_MS` | `5000` | Baresip bridge-command timeout in milliseconds (`100`–`120000`) |
 | `TALKTOME_DEFAULT_AUDIO_SOURCE` | empty | Safe source restored when no previous non-bridge device was recorded |
 | `TALKTOME_DEFAULT_AUDIO_PLAYER` | empty | Safe player restored when no previous non-bridge device was recorded |
+| `BARESIP_DISABLE_ALERT_TONES` | `false` | On `baresip`: silence ring/alert tones at runtime so headless hosts never open `alsa,default` for incoming-call alerts |
 
 The talktome connection settings and every secret are app-only startup
 settings. Nuxt public runtime configuration uses the `NUXT_PUBLIC_*` name,
 which is why compose supplies the second bridge-enabled variable explicitly.
 Public runtime configuration is delivered to the browser; never put the token
-or any other credential in a `NUXT_PUBLIC_*` variable. The sole talktome
-variable passed to baresip is the non-secret global gate, and it is present
-only so Compose notices gate changes and recreates that container; baresip
-does not consume it. App environment changes are not hot-reloaded. For a
-global gate change, run
+or any other credential in a `NUXT_PUBLIC_*` variable. Baresip receives the
+non-secret global gate (Compose recreation marker only) and the optional
+`BARESIP_DISABLE_ALERT_TONES` flag. App environment changes are not
+hot-reloaded. For a global gate change, run
 `docker compose up -d --force-recreate app baresip` (with the applicable
 compose-file option) so both startup state and the baresip process are fresh.
 

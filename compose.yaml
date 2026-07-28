@@ -49,6 +49,8 @@ services:
     environment:
       # Compose recreation trigger only; baresip does not load the module from this flag.
       - TALKTOME_BRIDGE_ENABLED=${TALKTOME_BRIDGE_ENABLED:-false}
+      # Headless/mediasoup-only hosts: silence ring/alert tones so alsa,default is not opened.
+      - BARESIP_DISABLE_ALERT_TONES=${BARESIP_DISABLE_ALERT_TONES:-false}
     volumes:
       - ./baresip/config:/config
       - ./baresip/.asoundrc:/root/.asoundrc
