@@ -55,6 +55,7 @@ describe('talktome bridge configuration', () => {
         'sip:studio@example.com': {
           enabled: TALKTOME_ACCOUNT_DEFAULTS.enabled,
           key: '41',
+          endpointKind: 'user',
           talktomeUserId: 41,
           target: { type: 'conference', id: 9 },
           ptt: {
@@ -71,6 +72,77 @@ describe('talktome bridge configuration', () => {
         },
       },
     });
+  });
+
+  it('accepts feed mappings and tracks duplicate feed IDs separately from users', () => {
+    const config = validateTalktomeBridgeConfig({
+      accounts: {
+        'sip:user@example.com': {
+          talktomeUserId: 5,
+          target: { type: 'conference', id: 9 },
+        },
+        'sip:feed@example.com': {
+          endpointKind: 'feed',
+          talktomeFeedId: 5,
+        },
+      },
+    });
+
+    expect(config.accounts['sip:user@example.com']).toMatchObject({
+      endpointKind: 'user',
+      talktomeUserId: 5,
+      target: { type: 'conference', id: 9 },
+    });
+    expect(config.accounts['sip:feed@example.com']).toMatchObject({
+      endpointKind: 'feed',
+      key: 'feed-5',
+      talktomeFeedId: 5,
+      target: null,
+      ptt: {
+        mode: TALKTOME_ACCOUNT_DEFAULTS.pttMode,
+        thresholdDb: TALKTOME_ACCOUNT_DEFAULTS.thresholdDb,
+        holdMs: TALKTOME_ACCOUNT_DEFAULTS.holdMs,
+        gpi: TALKTOME_ACCOUNT_DEFAULTS.gpi,
+      },
+    });
+
+    expect(() =>
+      validateTalktomeBridgeConfig({
+        accounts: {
+          'sip:first@example.com': {
+            endpointKind: 'feed',
+            talktomeFeedId: 7,
+          },
+          'sip:second@example.com': {
+            endpointKind: 'feed',
+            talktomeFeedId: 7,
+          },
+        },
+      }),
+    ).toThrow(TalktomeConfigValidationError);
+
+    try {
+      validateTalktomeBridgeConfig({
+        accounts: {
+          'sip:first@example.com': {
+            endpointKind: 'feed',
+            talktomeFeedId: 7,
+          },
+          'sip:second@example.com': {
+            endpointKind: 'feed',
+            talktomeFeedId: 7,
+          },
+        },
+      });
+    } catch (error) {
+      expect((error as TalktomeConfigValidationError).issues).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining(
+            '.talktomeFeedId duplicates 7 used by sip:first@example.com',
+          ),
+        ]),
+      );
+    }
   });
 
   it('rejects malformed mappings, duplicate normalized URIs, invalid gpi, and token fields', () => {

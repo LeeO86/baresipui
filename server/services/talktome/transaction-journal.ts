@@ -264,24 +264,63 @@ function validateJournalMapping(
 ): TalktomeAccountMapping | null {
   if (value === null) return null;
   if (!isRecord(value)) throw new Error(`${label} must be an object or null`);
-  requireExactKeys(
-    value,
-    [
-      'enabled',
-      'key',
-      'talktomeUserId',
-      'target',
-      'ptt',
-      'tally',
-      'mixLocalCallers',
-      'bitrateBps',
-      'previousAudioSource',
-      'previousAudioPlayer',
-    ],
-    label,
-  );
-  if (!isRecord(value.target)) throw new Error(`${label}.target must be an object`);
-  requireExactKeys(value.target, ['type', 'id'], `${label}.target`);
+  const mappingKeys = [
+    'enabled',
+    'key',
+    'endpointKind',
+    'talktomeUserId',
+    'talktomeFeedId',
+    'target',
+    'ptt',
+    'tally',
+    'mixLocalCallers',
+    'bitrateBps',
+    'previousAudioSource',
+    'previousAudioPlayer',
+  ] as const;
+  requireAllowedKeys(value, mappingKeys, label);
+  // endpointKind is optional for journals written before feed mappings existed;
+  // missing values are treated as legacy user mappings (same as config normalize).
+  for (const key of [
+    'enabled',
+    'key',
+    'target',
+    'ptt',
+    'tally',
+    'mixLocalCallers',
+    'bitrateBps',
+    'previousAudioSource',
+    'previousAudioPlayer',
+  ] as const) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+      throw new Error(`${label}.${key} is required`);
+    }
+  }
+  if (
+    value.endpointKind !== undefined &&
+    value.endpointKind !== 'user' &&
+    value.endpointKind !== 'feed'
+  ) {
+    throw new Error(`${label}.endpointKind must be user or feed`);
+  }
+  if (
+    value.endpointKind === 'feed' &&
+    !Object.prototype.hasOwnProperty.call(value, 'talktomeFeedId')
+  ) {
+    throw new Error(`${label}.talktomeFeedId is required`);
+  }
+  if (
+    value.endpointKind !== 'feed' &&
+    !Object.prototype.hasOwnProperty.call(value, 'talktomeUserId')
+  ) {
+    throw new Error(`${label}.talktomeUserId is required`);
+  }
+  if (value.endpointKind === 'feed') {
+    if (value.target !== null) throw new Error(`${label}.target must be null`);
+  } else {
+    if (!isRecord(value.target)) throw new Error(`${label}.target must be an object`);
+    requireExactKeys(value.target, ['type', 'id'], `${label}.target`);
+  }
   if (!isRecord(value.ptt)) throw new Error(`${label}.ptt must be an object`);
   requireExactKeys(
     value.ptt,
@@ -344,9 +383,11 @@ function mappingEquals(
   return (
     left.enabled === right.enabled &&
     left.key === right.key &&
+    left.endpointKind === right.endpointKind &&
     left.talktomeUserId === right.talktomeUserId &&
-    left.target.type === right.target.type &&
-    left.target.id === right.target.id &&
+    left.talktomeFeedId === right.talktomeFeedId &&
+    left.target?.type === right.target?.type &&
+    left.target?.id === right.target?.id &&
     left.ptt.mode === right.ptt.mode &&
     left.ptt.thresholdDb === right.ptt.thresholdDb &&
     left.ptt.holdMs === right.ptt.holdMs &&

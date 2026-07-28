@@ -6,7 +6,9 @@ import type {
   BridgeApi,
   BridgeConsumer,
   BridgeControlEvent,
+  BridgeFeedPort,
   BridgeRuntimeConfig,
+  BridgeSessionEndpoint,
   BridgeUserPort,
 } from '~/server/services/talktome/types';
 import type { TalktomeModuleController } from '~/server/services/talktome/module-controller';
@@ -19,6 +21,7 @@ export function makeMapping(
   const base: TalktomeAccountMapping = {
     enabled: true,
     key: 'studio',
+    endpointKind: 'user',
     talktomeUserId: 41,
     target: { type: 'conference', id: 9 },
     ptt: {
@@ -36,16 +39,36 @@ export function makeMapping(
     previousAudioSource: '',
     previousAudioPlayer: '',
   };
+  if (overrides.endpointKind === 'feed') {
+    const feed = {
+      ...base,
+      ...overrides,
+      endpointKind: 'feed',
+      talktomeFeedId: overrides.talktomeFeedId ?? 3,
+      target: null,
+      ptt: { ...base.ptt, ...overrides.ptt },
+      tally: { ...base.tally, ...overrides.tally },
+    } as Record<string, unknown>;
+    delete feed.talktomeUserId;
+    return feed as TalktomeAccountMapping;
+  }
   return {
     ...base,
     ...overrides,
-    target: { ...base.target, ...overrides.target },
+    endpointKind: overrides.endpointKind ?? base.endpointKind,
+    target:
+      overrides.target === null
+        ? null
+        : { ...base.target, ...overrides.target },
     ptt: { ...base.ptt, ...overrides.ptt },
     tally: { ...base.tally, ...overrides.tally },
-  };
+  } as TalktomeAccountMapping;
 }
 
 export function makeUserPort(mapping: TalktomeAccountMapping): BridgeUserPort {
+  if (mapping.endpointKind !== 'user') {
+    throw new Error('makeUserPort requires a user mapping');
+  }
   return {
     id: `port-${mapping.talktomeUserId}`,
     kind: 'user',
@@ -65,13 +88,32 @@ export function makeUserPort(mapping: TalktomeAccountMapping): BridgeUserPort {
   };
 }
 
+export function makeFeedPort(mapping: TalktomeAccountMapping): BridgeFeedPort {
+  if (mapping.endpointKind !== 'feed') {
+    throw new Error('makeFeedPort requires a feed mapping');
+  }
+  return {
+    id: `feed-${mapping.talktomeFeedId}`,
+    kind: 'feed',
+    userId: null,
+    feedId: mapping.talktomeFeedId,
+    label: mapping.key,
+    enabled: true,
+    input: { deviceId: 'baresip-sip-tx', leftChannel: 1, rightChannel: 2 },
+    output: null,
+    updatedAt: null,
+  };
+}
+
 export function makeRuntimeConfig(
   mappings: TalktomeAccountMapping[],
 ): BridgeRuntimeConfig {
   return {
     bridgeId: 'bridge-main',
     revision: 'revision-1',
-    ports: mappings.map(makeUserPort),
+    ports: mappings.map((mapping) =>
+      mapping.endpointKind === 'feed' ? makeFeedPort(mapping) : makeUserPort(mapping),
+    ),
   };
 }
 
@@ -165,13 +207,27 @@ export function makeBridgeHarness(
     getConfig: vi.fn(async () => runtimeConfig),
     putUserEndpoint: vi.fn(async () => runtimeConfig),
     putFeedEndpoint: vi.fn(async () => runtimeConfig),
-    createSession: vi.fn(async (_bridgeId: string, userId: number) => {
+    createSession: vi.fn(async (_bridgeId: string, endpoint: BridgeSessionEndpoint) => {
+      if ('feedId' in endpoint) {
+        const mapping = mappingValues.find(
+          (candidate) =>
+            candidate.endpointKind === 'feed' &&
+            candidate.talktomeFeedId === endpoint.feedId,
+        );
+        if (!mapping) throw new Error(`Unknown test feed ${endpoint.feedId}`);
+        return {
+          sessionId: `session-feed-${endpoint.feedId}`,
+          port: makeFeedPort(mapping),
+        };
+      }
       const mapping = mappingValues.find(
-        (candidate) => candidate.talktomeUserId === userId,
+        (candidate) =>
+          candidate.endpointKind === 'user' &&
+          candidate.talktomeUserId === endpoint.userId,
       );
-      if (!mapping) throw new Error(`Unknown test user ${userId}`);
+      if (!mapping) throw new Error(`Unknown test user ${endpoint.userId}`);
       return {
-        sessionId: `session-${userId}`,
+        sessionId: `session-${endpoint.userId}`,
         port: makeUserPort(mapping),
       };
     }),

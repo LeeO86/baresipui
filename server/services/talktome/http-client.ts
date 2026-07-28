@@ -16,6 +16,7 @@ import type {
   BridgeProducerState,
   BridgeRtpParameters,
   BridgeRuntimeConfig,
+  BridgeSessionEndpoint,
   BridgeSessionResponse,
   BridgeTalkStateRequest,
   BridgeTalkStateResponse,
@@ -170,11 +171,14 @@ export class TalktomeBridgeHttpClient implements BridgeApi {
     );
   }
 
-  createSession(bridgeId: string, userId: number): Promise<BridgeSessionResponse> {
+  createSession(
+    bridgeId: string,
+    endpoint: BridgeSessionEndpoint,
+  ): Promise<BridgeSessionResponse> {
     return this.requestJson(
       'POST',
       '/api/v1/bridge/sessions',
-      { bridgeId, userId: positiveId(userId, 'userId') },
+      { bridgeId, ...sessionEndpointBody(endpoint) },
       parseSession,
     );
   }
@@ -468,6 +472,13 @@ function positiveId(value: number, label: string): number {
     throw new Error(`${label} must be a positive integer`);
   }
   return value;
+}
+
+function sessionEndpointBody(endpoint: BridgeSessionEndpoint): BridgeSessionEndpoint {
+  if ('userId' in endpoint) {
+    return { userId: positiveId(endpoint.userId, 'userId') };
+  }
+  return { feedId: positiveId(endpoint.feedId, 'feedId') };
 }
 
 function requireToken(value: string): string {

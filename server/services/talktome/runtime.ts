@@ -4,6 +4,7 @@ import type {
   TalktomeAccountMapping,
   TalktomeBridgeGlobalPhase,
   TalktomeBridgeGlobalStatus,
+  TalktomeBridgeServerFeedPort,
   TalktomeBridgeServerUserPort,
   TalktomeBridgeStatus,
 } from '~/types';
@@ -15,6 +16,7 @@ import {
 import { registerBaresipEventObserver } from '../baresip-parser';
 import {
   getTalktomeBridgeConfigManager,
+  isFeedMapping,
   normalizeAccountUri,
   type TalktomeBridgeConfigManager,
 } from '../talktome-bridge-config';
@@ -46,6 +48,7 @@ export interface TalktomeBridgePublicServerConfig {
   bridgeId: string;
   revision: string;
   userPorts: TalktomeBridgeServerUserPort[];
+  feedPorts: TalktomeBridgeServerFeedPort[];
 }
 
 /**
@@ -189,6 +192,7 @@ export class TalktomeBridgeRuntime {
         .filter((port) => port.kind === 'user')
         .map((port) => ({
           id: port.id,
+          kind: 'user',
           userId: port.userId,
           label: port.label,
           enabled: port.enabled,
@@ -202,6 +206,16 @@ export class TalktomeBridgeRuntime {
           triggerTargets: port.triggerTargets.map((target) => ({
             ...target,
           })),
+        })),
+      feedPorts: this.remoteConfig.ports
+        .filter((port) => port.kind === 'feed')
+        .map((port) => ({
+          id: port.id,
+          kind: 'feed',
+          feedId: port.feedId,
+          label: port.label,
+          enabled: port.enabled,
+          input: { ...port.input },
         })),
     };
   }
@@ -413,6 +427,7 @@ export class TalktomeBridgeRuntime {
       const gpio = dtmfToGpio(event.param.trim());
       if (
         mapping?.enabled &&
+        !isFeedMapping(mapping) &&
         mapping.ptt.mode === 'external' &&
         gpio?.gpioIndex === mapping.ptt.gpi &&
         event.id

@@ -4,7 +4,7 @@ import {
   TalktomeBridgeHttpClient,
   normalizeTalktomeBaseUrl,
 } from '~/server/services/talktome/http-client';
-import { makeMapping, makeUserPort } from './helpers/talktome';
+import { makeFeedPort, makeMapping, makeUserPort } from './helpers/talktome';
 
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
@@ -233,7 +233,7 @@ describe('TalktomeBridgeHttpClient', () => {
       fetch: fetchMock as typeof fetch,
     });
 
-    await client.createSession('bridge-main', 41);
+    await client.createSession('bridge-main', { userId: 41 });
     await client.createPlainSendTransport('session-1');
     await client.createProducer('session-1', 111, 999);
     await client.resumeProducer('session-1', 'producer/1');
@@ -286,6 +286,30 @@ describe('TalktomeBridgeHttpClient', () => {
         { reason: 'last-call-ended' },
       ],
     ]);
+  });
+
+  it('creates feed sessions with feedId request bodies', async () => {
+    const feedMapping = makeMapping({
+      endpointKind: 'feed',
+      key: 'feed-3',
+      talktomeFeedId: 3,
+      target: null,
+    });
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ sessionId: 'session-feed-3', port: makeFeedPort(feedMapping) }),
+    );
+    const client = new TalktomeBridgeHttpClient({
+      baseUrl: 'https://bridge.test',
+      token: 'token',
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await client.createSession('bridge-main', { feedId: 3 });
+
+    expect(bodyOf(fetchMock.mock.calls[0][1] as RequestInit)).toEqual({
+      bridgeId: 'bridge-main',
+      feedId: 3,
+    });
   });
 
   it('surfaces HTTP and response-shape failures as structured BridgeHttpError values', async () => {
