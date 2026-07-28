@@ -21,8 +21,9 @@ for this module; normal process shutdown removes it.
 - Permission to create the dedicated talktome users and configure their
   allowed trigger targets. A token matching this bridge can assign those users
   as endpoints on its own bridge.
-- A dedicated talktome user for each SIP account that will be bridged. Use a
-  user endpoint, not a feed endpoint, because feeds are send-only.
+- A dedicated talktome user or feed endpoint for each SIP account that will be
+  bridged. User endpoints are bidirectional conference mappings; feed endpoints
+  are SIP-to-feed send-only mappings.
 - Opus enabled on the SIP/baresip side.
 - Bidirectional UDP reachability between the talktome server and the Docker
   host.
@@ -92,7 +93,7 @@ receives no API credentials.
 | `TALKTOME_BRIDGE_CONFIG_PATH` | `/config/talktome-bridge.json` | No | Persistent per-account mapping file. Keep it on the mounted config volume. |
 | `TALKTOME_BRIDGE_NAME` | `baresipui` | No | Human-readable bridge name sent during announcement. |
 | `TALKTOME_BRIDGE_AUTH_MODE` | `bearer` | No | Authentication header mode: `bearer` or `api-key`. |
-| `TALKTOME_BRIDGE_AUTO_PROVISION` | `true` | No | Assign or update matching user endpoints on this bridge. Set `false` to require an existing exact endpoint configuration. |
+| `TALKTOME_BRIDGE_AUTO_PROVISION` | `true` | No | Assign or update matching user/feed endpoints on this bridge. Set `false` to require an existing exact endpoint configuration. |
 | `TALKTOME_BRIDGE_COMMAND_TIMEOUT_MS` | `5000` | No | ctrl_tcp module-command timeout in milliseconds; valid range is `100`–`120000`. |
 | `TALKTOME_DEFAULT_AUDIO_SOURCE` | empty | No | Source restored if an account has no recorded previous non-bridge source. |
 | `TALKTOME_DEFAULT_AUDIO_PLAYER` | empty | No | Player restored if an account has no recorded previous non-bridge player. |
@@ -138,7 +139,7 @@ screenshots, or support bundles.
 - Plain RTP is not encrypted. Keep media on a trusted network, private
   interconnect, or VPN.
 - The bridge token is server-only. A matching bridge bearer token can assign
-  and update user endpoints on its own bridge; it is not a global
+  and update user/feed endpoints on its own bridge; it is not a global
   administrator token and cannot administer another bridge. `api-key` mode
   has only the permissions granted to that key.
 - The mapping JSON contains identifiers and device settings, not the token,
@@ -161,12 +162,15 @@ For a short local ctrl_tcp diagnostic, use a temporary Compose override with
    Status → Bridge Instances.
 3. Store the resulting matching bridge token securely for the app service.
 4. Create one dedicated talktome user per bridged SIP account.
-5. Assign each user as a `user` endpoint of the bridge. With
+5. Assign each talktome user as a `user` endpoint or each feed as a `feed`
+   endpoint of the bridge. With
    `TALKTOME_BRIDGE_AUTO_PROVISION=true`, the matching bridge token can assign
-   or update user endpoints on this bridge; it does not need global
+   or update user/feed endpoints on this bridge; it does not need global
    administrative permission. With auto-provision disabled, create the exact
-   endpoint and trigger configuration before enabling the account.
-6. Permit the intended conference in that endpoint's trigger targets.
+   endpoint and, for user endpoints, trigger configuration before enabling the
+   account.
+6. For user endpoints, permit the intended conference in that endpoint's
+   trigger targets.
 7. Add the per-account mapping in the baresip UI.
 
 The bridge ID and endpoint user IDs are identifiers, not passwords. The bridge
@@ -271,12 +275,17 @@ then provides an independent per-account opt-in. A mapped account needs:
 
 - enabled/disabled state;
 - a stable context key, normally the talktome user ID;
-- the talktome user endpoint;
-- one allowed conference target;
-- PTT mode and its settings;
+- the talktome endpoint: either a user endpoint or a feed endpoint;
+- for user endpoints, one allowed conference target;
+- for user endpoints, PTT mode and its settings;
 - optional tally GPO assignments;
 - `mixLocalCallers`, normally `true`;
 - Opus bitrate, normally 64000 bit/s.
+
+Feed mappings are send-only. The app creates the talktome bridge session with
+`feedId`, binds the SIP transmit path to that feed, and streams while the SIP
+call is up. Feeds have no conference target, trigger/PTT state, consumers, or
+caller return audio.
 
 When an account is enabled, its audio devices become
 `mediasoup,<key>`. The app preserves the previous `audio_source` and
@@ -309,6 +318,7 @@ The generated file has this shape:
     "sip:studio@example.invalid": {
       "enabled": true,
       "key": "1042",
+      "endpointKind": "user",
       "talktomeUserId": 1042,
       "target": {
         "type": "conference",
@@ -447,11 +457,14 @@ Before carrying production traffic:
    the app dynamically loads the module.
 4. Confirm no `mediasoup_bridge.so` module line exists in the baresip config.
 5. Confirm both UDP ranges are allowed on their respective hosts.
-6. Confirm a mapped user is a bridge endpoint and the conference is an
-   allowed trigger target.
-7. Establish a SIP call and verify caller-to-conference audio after PTT.
-8. Verify conference-to-caller audio and increasing RX packet counters.
-9. Verify PTT release, lock behavior, and both configured tally outputs.
+6. Confirm the mapped user or feed is a bridge endpoint. For user mappings,
+   confirm the conference is an allowed trigger target.
+7. Establish a SIP call and verify caller-to-conference audio after PTT, or
+   caller-to-feed audio immediately for feed mappings.
+8. For user mappings, verify conference-to-caller audio and increasing RX
+   packet counters.
+9. For user mappings, verify PTT release, lock behavior, and both configured
+   tally outputs.
 10. Test an unmapped SIP account and an unreachable talktome server to confirm
     SIP failure isolation.
 11. Run a multi-caller party-line test if an account permits concurrent calls.
@@ -494,25 +507,27 @@ diagnostics rather than opening ctrl_tcp to an untrusted network.
   credential. Rotate it without writing it to logs.
 - Confirm `TALKTOME_BASE_URL` is the service base, uses HTTP(S), and contains
   no credentials, query, or fragment.
-- Confirm bridge IDs and user IDs match the provisioned talktome resources.
+- Confirm bridge IDs and user/feed IDs match the provisioned talktome resources.
 - A bearer token must match the configured bridge. That token can assign or
-  update user endpoints on its own bridge, but cannot administer another
+  update user/feed endpoints on its own bridge, but cannot administer another
   bridge; an API key must have equivalent explicit permission.
-- Confirm the selected conference appears in the endpoint's allowed trigger
-  targets.
+- For user mappings, confirm the selected conference appears in the endpoint's
+  allowed trigger targets.
 - Admin Status shows **Bridge Instances → Stale** when the registry has not
   received `/announce` within ~45s (talktome v1.1.1). This agent re-announces
   every 10s while connected; if it still goes stale, check app logs for
   announce HTTP failures and that only one process owns the bridge ID.
 - **Device missing** means the bridge inventory does not contain the input /
-  output device IDs assigned to a user endpoint. This agent announces virtual
-  `baresip-sip-tx` / `baresip-sip-rx` devices and, when auto-provision is on,
-  assigns those to mapped endpoints. Restart/reconnect after upgrading so the
-  next announce + provision cycle can clear the warning.
+  output device IDs assigned to a user endpoint, or the input device assigned
+  to a feed endpoint. This agent announces virtual `baresip-sip-tx` /
+  `baresip-sip-rx` devices and, when auto-provision is on, assigns those to
+  mapped endpoints. Restart/reconnect after upgrading so the next announce +
+  provision cycle can clear the warning.
 
 ### Conference hears no caller audio
 
-- Confirm PTT is live; user producers begin paused.
+- For user mappings, confirm PTT is live; user producers begin paused. Feed
+  mappings stream continuously while the SIP call is up.
 - Check TX packet/error counters with `ms_bridge_stat`.
 - Verify the talktome server's `RTC_PORT_RANGE`, host firewall, mediasoup
   `announcedIp`, and Docker-host route to that address. Hostnames that do not

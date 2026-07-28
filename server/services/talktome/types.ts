@@ -135,6 +135,10 @@ export interface BridgeSessionResponse {
   port: BridgePort;
 }
 
+export type BridgeSessionEndpoint =
+  | { userId: number }
+  | { feedId: number };
+
 export interface BridgePlainSendTransport {
   id: string;
   ip: string;
@@ -335,7 +339,10 @@ export interface BridgeApi {
     feedId: number,
     update: BridgeFeedEndpointUpdate,
   ): Promise<BridgeRuntimeConfig>;
-  createSession(bridgeId: string, userId: number): Promise<BridgeSessionResponse>;
+  createSession(
+    bridgeId: string,
+    endpoint: BridgeSessionEndpoint,
+  ): Promise<BridgeSessionResponse>;
   deleteSession(sessionId: string, reason?: string): Promise<BridgeOkResponse>;
   heartbeat(
     sessionId: string,

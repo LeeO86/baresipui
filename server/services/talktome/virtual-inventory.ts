@@ -62,6 +62,18 @@ export function virtualBridgeDeviceSelection(): {
   };
 }
 
+export function virtualBridgeInputDeviceSelection(): {
+  inputDevice: string;
+  inputLeftChannel: number;
+  inputRightChannel: number;
+} {
+  return {
+    inputDevice: VIRTUAL_BRIDGE_INPUT_ID,
+    inputLeftChannel: 1,
+    inputRightChannel: 2,
+  };
+}
+
 export function usesVirtualBridgeDevices(port: {
   input?: { deviceId: string; leftChannel: number; rightChannel: number };
   output?: { deviceId: string; leftChannel: number; rightChannel: number } | null;
@@ -73,5 +85,15 @@ export function usesVirtualBridgeDevices(port: {
     port.output?.deviceId === VIRTUAL_BRIDGE_OUTPUT_ID &&
     port.output.leftChannel === 1 &&
     port.output.rightChannel === 2
+  );
+}
+
+export function usesVirtualBridgeInputDevice(port: {
+  input?: { deviceId: string; leftChannel: number; rightChannel: number };
+}): boolean {
+  return (
+    port.input?.deviceId === VIRTUAL_BRIDGE_INPUT_ID &&
+    port.input.leftChannel === 1 &&
+    port.input.rightChannel === 2
   );
 }

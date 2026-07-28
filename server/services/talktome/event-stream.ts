@@ -16,7 +16,7 @@ export interface BridgeEventSubscriberOptions {
   api: BridgeApi;
   sessionId: string;
   onEvent: (event: BridgeControlEvent) => void | Promise<void>;
-  onReconcile: (activeProducers: BridgeActiveProducer[]) => void | Promise<void>;
+  onReconcile?: (activeProducers: BridgeActiveProducer[]) => void | Promise<void>;
   onError?: (error: unknown, source: 'sse' | 'poll' | 'reconcile' | 'handler') => void;
   onTransportChange?: (transport: 'sse' | 'poll' | 'disconnected') => void;
   onTransportLoss?: (error: unknown) => void | Promise<void>;
@@ -275,10 +275,12 @@ export class BridgeEventSubscriber {
       throw new Error('A stopped BridgeEventSubscriber cannot be restarted');
     }
     this.running = true;
-    this.reconcileTimer = setInterval(() => {
-      void this.reconcile();
-    }, this.reconcileIntervalMs);
-    this.reconcileTimer.unref?.();
+    if (this.options.onReconcile) {
+      this.reconcileTimer = setInterval(() => {
+        void this.reconcile();
+      }, this.reconcileIntervalMs);
+      this.reconcileTimer.unref?.();
+    }
     this.runPromise = this.run().finally(() => {
       this.running = false;
       if (this.reconcileTimer) clearInterval(this.reconcileTimer);
@@ -418,6 +420,7 @@ export class BridgeEventSubscriber {
 
   private reconcile(): Promise<void> {
     if (this.controller.signal.aborted) return Promise.resolve();
+    if (!this.options.onReconcile) return Promise.resolve();
     if (this.reconcilePromise) return this.reconcilePromise;
     this.reconcilePromise = (async () => {
       try {

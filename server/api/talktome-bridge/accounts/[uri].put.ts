@@ -5,6 +5,7 @@ import type {
 import { withAccountAudioTransaction } from '../../../services/accounts-file';
 import {
   getTalktomeBridgeConfigManager,
+  isFeedMapping,
   normalizeAccountUri,
   TalktomeConfigValidationError,
   validateTalktomeBridgeConfig,
@@ -95,21 +96,23 @@ export default defineEventHandler(async (event) => {
             }
 
             const server = getTalktomeBridgeRuntime()?.getPublicServerConfig();
-            const serverPort = server?.userPorts.find(
-              (port) => port.userId === mapping.talktomeUserId,
-            );
-            if (
-              serverPort &&
-              !serverPort.triggerTargets.some(
-                (target) =>
-                  target.type === mapping.target.type &&
-                  target.id === mapping.target.id,
-              )
-            ) {
-              throw createError({
-                statusCode: 400,
-                message: 'Target is not allowed for this talktome user endpoint',
-              });
+            if (!isFeedMapping(mapping)) {
+              const serverPort = server?.userPorts.find(
+                (port) => port.userId === mapping.talktomeUserId,
+              );
+              if (
+                serverPort &&
+                !serverPort.triggerTargets.some(
+                  (target) =>
+                    target.type === mapping.target.type &&
+                    target.id === mapping.target.id,
+                )
+              ) {
+                throw createError({
+                  statusCode: 400,
+                  message: 'Target is not allowed for this talktome user endpoint',
+                });
+              }
             }
 
             const nextSource = mapping.enabled
@@ -221,9 +224,11 @@ function mappingAffectsRuntime(
   return (
     previous.enabled !== next.enabled ||
     previous.key !== next.key ||
+    previous.endpointKind !== next.endpointKind ||
     previous.talktomeUserId !== next.talktomeUserId ||
-    previous.target.type !== next.target.type ||
-    previous.target.id !== next.target.id ||
+    previous.talktomeFeedId !== next.talktomeFeedId ||
+    previous.target?.type !== next.target?.type ||
+    previous.target?.id !== next.target?.id ||
     previous.ptt.mode !== next.ptt.mode ||
     previous.ptt.thresholdDb !== next.ptt.thresholdDb ||
     previous.ptt.holdMs !== next.ptt.holdMs ||

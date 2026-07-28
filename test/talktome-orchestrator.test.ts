@@ -259,7 +259,9 @@ describe('TalktomeBridgeOrchestrator', () => {
 
     expect(harness.module.openContext).toHaveBeenCalledTimes(1);
     expect(harness.api.createSession).toHaveBeenCalledTimes(1);
-    expect(harness.api.createSession).toHaveBeenCalledWith('bridge-main', 41);
+    expect(harness.api.createSession).toHaveBeenCalledWith('bridge-main', {
+      userId: 41,
+    });
     expect(orchestrator.getStatus(ACCOUNT_URI)).toMatchObject({
       phase: 'connected',
       activeCallIds: ['call-1', 'call-2'],
@@ -287,6 +289,44 @@ describe('TalktomeBridgeOrchestrator', () => {
       eventTransport: 'disconnected',
     });
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('starts feed mappings as continuous send-only sessions without consumers or PTT', async () => {
+    const feedMapping = makeMapping({
+      endpointKind: 'feed',
+      key: 'feed-3',
+      talktomeFeedId: 3,
+      target: null,
+    });
+    const harness = makeBridgeHarness({ [ACCOUNT_URI]: feedMapping });
+    const orchestrator = createOrchestrator(harness);
+    await orchestrator.initialize();
+
+    await orchestrator.callEstablished(ACCOUNT_URI, 'call-1');
+    await harness.waitForStream('session-feed-3');
+
+    expect(harness.api.createSession).toHaveBeenCalledWith('bridge-main', {
+      feedId: 3,
+    });
+    expect(harness.module.openContext).toHaveBeenCalledWith('feed-3');
+    expect(harness.module.bindTransmit).toHaveBeenCalledWith(
+      'feed-3',
+      expect.any(Object),
+    );
+    expect(harness.module.setTransmitMuted).toHaveBeenCalledWith('feed-3', false);
+    expect(harness.api.getActiveProducers).not.toHaveBeenCalled();
+    expect(harness.api.createConsumer).not.toHaveBeenCalled();
+    expect(harness.api.resumeProducer).not.toHaveBeenCalled();
+    expect(harness.api.pauseProducer).not.toHaveBeenCalled();
+    expect(harness.api.setTalkState).not.toHaveBeenCalled();
+    expect(orchestrator.getStatus(ACCOUNT_URI)).toMatchObject({
+      phase: 'connected',
+      activeCallIds: ['call-1'],
+      sessionId: 'session-feed-3',
+      producerId: 'local-session-feed-3',
+      consumerCount: 0,
+      pttLive: true,
+    });
   });
 
   it('uses reserve → consumer → add → resume, deduplicates producer events, and reconciles missed closure', async () => {
@@ -920,7 +960,9 @@ describe('TalktomeBridgeOrchestrator', () => {
       producerId: 'local-session-52',
     });
     expect(harness.api.createSession).toHaveBeenCalledTimes(1);
-    expect(harness.api.createSession).toHaveBeenCalledWith('bridge-main', 52);
+    expect(harness.api.createSession).toHaveBeenCalledWith('bridge-main', {
+      userId: 52,
+    });
     expect(harness.module.bindTransmit).toHaveBeenCalledWith(
       'good',
       expect.any(Object),

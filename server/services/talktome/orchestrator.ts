@@ -1,4 +1,5 @@
 import {
+  isFeedMapping,
   normalizeAccountUri,
   type TalktomeAccountMapping,
 } from '../talktome-bridge-config';
@@ -10,8 +11,9 @@ import type {
 } from '~/types';
 import { BridgeEventSubscriber } from './event-stream';
 import {
-  buildVirtualBridgeInventory,
+  usesVirtualBridgeInputDevice,
   usesVirtualBridgeDevices,
+  virtualBridgeInputDeviceSelection,
   virtualBridgeDeviceSelection,
 } from './virtual-inventory';
 import type {
@@ -26,6 +28,7 @@ import type {
   BridgeProducerEventPayload,
   BridgeTalkCommandPayload,
   BridgeTargetAudioCommandPayload,
+  BridgeFeedEndpointUpdate,
   BridgeUserEndpointUpdate,
   JsonObject,
 } from './types';
@@ -199,7 +202,7 @@ export class TalktomeBridgeOrchestrator {
           const accountUri = normalizeAccountUri(rawUri);
           try {
             runtimeConfig = await this.ensureEndpoint(runtimeConfig, mapping);
-            this.assertTargetAllowed(runtimeConfig, mapping);
+            if (!isFeedMapping(mapping)) this.assertTargetAllowed(runtimeConfig, mapping);
           } catch (error) {
             const runtime = this.getOrCreateRuntime(accountUri, mapping);
             runtime.phase = 'failed';
@@ -318,7 +321,7 @@ export class TalktomeBridgeOrchestrator {
       try {
         let serverConfig = await this.options.api.getConfig(this.options.bridgeId);
         serverConfig = await this.ensureEndpoint(serverConfig, mapping);
-        this.assertTargetAllowed(serverConfig, mapping);
+        if (!isFeedMapping(mapping)) this.assertTargetAllowed(serverConfig, mapping);
       } catch (error) {
         if (runtime) {
           if (runtime.pendingTeardownReason) runtime.phase = 'stopping';
@@ -361,7 +364,13 @@ export class TalktomeBridgeOrchestrator {
   ): Promise<void> {
     if (!Number.isFinite(levelDbfs)) return;
     const runtime = this.runtimes.get(normalizeAccountUri(accountUri));
-    if (!runtime || runtime.mapping.ptt.mode !== 'audio-level') return;
+    if (
+      !runtime ||
+      isFeedMapping(runtime.mapping) ||
+      runtime.mapping.ptt.mode !== 'audio-level'
+    ) {
+      return;
+    }
     await this.enqueue(runtime, async () => {
       if (!runtime.sessionId || runtime.calls.size === 0) return;
       if (levelDbfs >= runtime.mapping.ptt.thresholdDb) {
@@ -406,7 +415,13 @@ export class TalktomeBridgeOrchestrator {
     pressedForCall?: boolean,
   ): Promise<void> {
     const runtime = this.runtimes.get(normalizeAccountUri(accountUri));
-    if (!runtime || runtime.mapping.ptt.mode !== 'external') return;
+    if (
+      !runtime ||
+      isFeedMapping(runtime.mapping) ||
+      runtime.mapping.ptt.mode !== 'external'
+    ) {
+      return;
+    }
     const legacy = typeof callIdOrPressed === 'boolean';
     const callId = legacy
       ? '__legacy-account-ptt__'
@@ -561,21 +576,33 @@ export class TalktomeBridgeOrchestrator {
         bitrateBps: runtime.mapping.bitrateBps,
       });
 
+      const feedMapping = isFeedMapping(runtime.mapping);
       const session = await this.options.api.createSession(
         this.options.bridgeId,
-        runtime.mapping.talktomeUserId,
+        feedMapping
+          ? { feedId: runtime.mapping.talktomeFeedId }
+          : { userId: runtime.mapping.talktomeUserId },
       );
       runtime.sessionId = session.sessionId;
-      if (
+      if (feedMapping) {
+        if (
+          session.port.kind !== 'feed' ||
+          session.port.feedId !== runtime.mapping.talktomeFeedId
+        ) {
+          throw new Error(
+            `Talktome feed ${runtime.mapping.talktomeFeedId} is not a bridge endpoint`,
+          );
+        }
+      } else if (
         session.port.kind !== 'user' ||
         !session.port.triggerTargets.some(
           (target) =>
-            target.type === runtime.mapping.target.type &&
-            target.id === runtime.mapping.target.id,
+            target.type === runtime.mapping.target?.type &&
+            target.id === runtime.mapping.target?.id,
         )
       ) {
         throw new Error(
-          `Target ${runtime.mapping.target.type}:${runtime.mapping.target.id} is not allowed for this bridge endpoint`,
+          `Target ${runtime.mapping.target?.type}:${runtime.mapping.target?.id} is not allowed for this bridge endpoint`,
         );
       }
       this.startEventSubscriber(runtime, generation);
@@ -594,10 +621,14 @@ export class TalktomeBridgeOrchestrator {
         payloadType: transport.payloadType,
         ssrc: transport.ssrc,
       });
-      await this.options.module.setTransmitMuted(runtime.mapping.key, true);
+      await this.options.module.setTransmitMuted(runtime.mapping.key, !feedMapping);
 
-      const active = await this.options.api.getActiveProducers(session.sessionId);
-      await this.reconcileProducers(runtime, active);
+      if (feedMapping) {
+        runtime.pttLive = true;
+      } else {
+        const active = await this.options.api.getActiveProducers(session.sessionId);
+        await this.reconcileProducers(runtime, active);
+      }
       this.startHeartbeat(runtime, generation);
       runtime.phase = 'connected';
       runtime.setupRetryDelayMs = INITIAL_SETUP_RETRY_MS;
@@ -639,17 +670,21 @@ export class TalktomeBridgeOrchestrator {
           await this.handleControlEvent(runtime, event);
         });
       },
-      onReconcile: (active) => {
-        if (!this.isCurrentSession(runtime, generation, sessionId, subscriber)) {
-          return;
-        }
-        return this.enqueue(runtime, async () => {
-          if (!this.isCurrentSession(runtime, generation, sessionId, subscriber)) {
-            return;
-          }
-          await this.reconcileProducers(runtime, active);
-        });
-      },
+      ...(isFeedMapping(runtime.mapping)
+        ? {}
+        : {
+            onReconcile: (active: BridgeActiveProducer[]) => {
+              if (!this.isCurrentSession(runtime, generation, sessionId, subscriber)) {
+                return;
+              }
+              return this.enqueue(runtime, async () => {
+                if (!this.isCurrentSession(runtime, generation, sessionId, subscriber)) {
+                  return;
+                }
+                await this.reconcileProducers(runtime, active);
+              });
+            },
+          }),
       onError: (error, source) => {
         if (!this.isCurrentSession(runtime, generation, sessionId, subscriber)) {
           return;
@@ -685,7 +720,7 @@ export class TalktomeBridgeOrchestrator {
           if (!this.isCurrentSession(runtime, generation, sessionId, subscriber)) {
             return;
           }
-          await this.failClosedApiPtt(runtime, error);
+          await this.handleEventTransportLoss(runtime, error);
         });
       },
     });
@@ -698,8 +733,10 @@ export class TalktomeBridgeOrchestrator {
     event: BridgeControlEvent,
   ): Promise<void> {
     if (!runtime.sessionId) return;
+    const feedMapping = isFeedMapping(runtime.mapping);
     switch (event.event) {
       case 'new-producer': {
+        if (feedMapping) break;
         const producer = producerFromPayload(event.payload);
         if (producer && !producer.retainOnly) {
           await this.ensureConsumer(runtime, producer);
@@ -707,11 +744,13 @@ export class TalktomeBridgeOrchestrator {
         break;
       }
       case 'producer-closed': {
+        if (feedMapping) break;
         const producerId = stringProperty(event.payload, 'producerId');
         if (producerId) await this.removeConsumer(runtime, producerId, true);
         break;
       }
       case 'consumer-closed': {
+        if (feedMapping) break;
         const consumerId = stringProperty(event.payload, 'consumerId');
         const producerId =
           stringProperty(event.payload, 'producerId') ||
@@ -736,16 +775,19 @@ export class TalktomeBridgeOrchestrator {
         break;
       }
       case 'incoming-talk-state': {
+        if (feedMapping) break;
         const payload = event.payload as BridgeIncomingTalkStatePayload;
         runtime.incomingTalkActive = Boolean(payload.state?.addressedNow?.length);
         await this.updateActiveTally(runtime);
         break;
       }
       case 'api-talk-command':
-        await this.handleApiTalkCommand(
-          runtime,
-          event.payload as unknown as BridgeTalkCommandPayload,
-        );
+        if (!feedMapping) {
+          await this.handleApiTalkCommand(
+            runtime,
+            event.payload as unknown as BridgeTalkCommandPayload,
+          );
+        }
         break;
       case 'api-target-audio-command':
         await this.handleTargetAudioCommand(
@@ -898,8 +940,8 @@ export class TalktomeBridgeOrchestrator {
       if (
         command.targetType &&
         command.targetType !== 'reply' &&
-        (command.targetType !== runtime.mapping.target.type ||
-          command.targetId !== runtime.mapping.target.id)
+        (command.targetType !== runtime.mapping.target?.type ||
+          command.targetId !== runtime.mapping.target?.id)
       ) {
         throw new Error('Requested talk target is not configured for this account');
       }
@@ -989,6 +1031,7 @@ export class TalktomeBridgeOrchestrator {
 
   private async applyDesiredPtt(runtime: AccountRuntime): Promise<void> {
     if (
+      isFeedMapping(runtime.mapping) ||
       runtime.phase === 'stopping' ||
       !runtime.sessionId ||
       !runtime.producerId
@@ -1008,7 +1051,7 @@ export class TalktomeBridgeOrchestrator {
       ) {
         await this.options.api.setTalkState(runtime.sessionId, {
           talking: true,
-          targets: [runtime.mapping.target],
+          targets: runtime.mapping.target ? [runtime.mapping.target] : [],
           lockActive: runtime.locked,
         });
         runtime.reportedLock = runtime.locked;
@@ -1029,7 +1072,7 @@ export class TalktomeBridgeOrchestrator {
         }
         const talkState = await this.options.api.setTalkState(runtime.sessionId, {
           talking: true,
-          targets: [runtime.mapping.target],
+          targets: runtime.mapping.target ? [runtime.mapping.target] : [],
           lockActive: runtime.locked,
         });
         if (!talkState.ok || !talkState.talking) {
@@ -1070,7 +1113,7 @@ export class TalktomeBridgeOrchestrator {
     runtime: AccountRuntime,
     lockActive: boolean,
   ): Promise<void> {
-    if (!runtime.sessionId || !runtime.producerId) return;
+    if (isFeedMapping(runtime.mapping) || !runtime.sessionId || !runtime.producerId) return;
     const sessionId = runtime.sessionId;
     const producerId = runtime.producerId;
     const [moduleMuteResult, talkStateResult, producerPauseResult] =
@@ -1200,6 +1243,19 @@ export class TalktomeBridgeOrchestrator {
     this.emitStatus(runtime);
   }
 
+  private async handleEventTransportLoss(
+    runtime: AccountRuntime,
+    cause: unknown,
+  ): Promise<void> {
+    if (!isFeedMapping(runtime.mapping)) {
+      await this.failClosedApiPtt(runtime, cause);
+      return;
+    }
+    runtime.phase = 'degraded';
+    runtime.lastError = `event transport lost: ${errorMessage(cause)}`;
+    this.emitStatus(runtime);
+  }
+
   private startHeartbeat(runtime: AccountRuntime, generation: number): void {
     if (runtime.heartbeatTimer) clearInterval(runtime.heartbeatTimer);
     const sessionId = runtime.sessionId;
@@ -1273,7 +1329,7 @@ export class TalktomeBridgeOrchestrator {
 
     const sessionId = runtime.sessionId;
     const producerId = runtime.producerId;
-    if (sessionId && producerId) {
+    if (sessionId && producerId && !isFeedMapping(runtime.mapping)) {
       try {
         await this.applyPttOff(runtime, false);
       } catch (error) {
@@ -1436,6 +1492,7 @@ export class TalktomeBridgeOrchestrator {
   }
 
   private async updateActiveTally(runtime: AccountRuntime): Promise<void> {
+    if (isFeedMapping(runtime.mapping)) return;
     const active =
       runtime.incomingTalkActive ||
       runtime.moduleReceiveActive ||
@@ -1454,6 +1511,7 @@ export class TalktomeBridgeOrchestrator {
   }
 
   private async updateLiveTally(runtime: AccountRuntime): Promise<void> {
+    if (isFeedMapping(runtime.mapping)) return;
     if (runtime.pttLive === runtime.liveTally) return;
     runtime.liveTally = runtime.pttLive;
     const gpo = runtime.mapping.tally.liveGpo;
@@ -1476,7 +1534,7 @@ export class TalktomeBridgeOrchestrator {
   }
 
   /**
-   * Point every user endpoint on this bridge at the announced virtual SIP
+   * Point every user/feed endpoint on this bridge at the announced virtual SIP
    * devices. Admin "Device missing" is raised for any assigned endpoint whose
    * device IDs are absent from inventory — including endpoints not yet mapped
    * in baresipui.
@@ -1487,17 +1545,26 @@ export class TalktomeBridgeOrchestrator {
     if (this.options.autoProvisionEndpoints === false) return config;
     let current = config;
     for (const port of config.ports) {
-      if (port.kind !== 'user' || usesVirtualBridgeDevices(port)) continue;
-      current = await this.options.api.putUserEndpoint(
+      if (port.kind === 'user') {
+        if (usesVirtualBridgeDevices(port)) continue;
+        current = await this.options.api.putUserEndpoint(
+          this.options.bridgeId,
+          port.userId,
+          {
+            triggerMode: port.trigger.mode,
+            triggerTargetType: port.trigger.target?.type ?? '',
+            triggerTargetId: port.trigger.target?.id ?? null,
+            triggerThresholdDb: port.trigger.thresholdDb,
+            ...virtualBridgeDeviceSelection(),
+          },
+        );
+        continue;
+      }
+      if (usesVirtualBridgeInputDevice(port)) continue;
+      current = await this.options.api.putFeedEndpoint(
         this.options.bridgeId,
-        port.userId,
-        {
-          triggerMode: port.trigger.mode,
-          triggerTargetType: port.trigger.target?.type ?? '',
-          triggerTargetId: port.trigger.target?.id ?? null,
-          triggerThresholdDb: port.trigger.thresholdDb,
-          ...virtualBridgeDeviceSelection(),
-        },
+        port.feedId,
+        virtualBridgeInputDeviceSelection(),
       );
     }
     return current;
@@ -1507,6 +1574,30 @@ export class TalktomeBridgeOrchestrator {
     config: Awaited<ReturnType<BridgeApi['getConfig']>>,
     mapping: TalktomeAccountMapping,
   ): Promise<Awaited<ReturnType<BridgeApi['getConfig']>>> {
+    if (isFeedMapping(mapping)) {
+      const existing = config.ports.find(
+        (port) => port.kind === 'feed' && port.feedId === mapping.talktomeFeedId,
+      );
+      if (existing && usesVirtualBridgeInputDevice(existing)) {
+        return config;
+      }
+      if (this.options.autoProvisionEndpoints === false && !existing) {
+        throw new Error(
+          `Talktome feed ${mapping.talktomeFeedId} is not assigned to bridge ${this.options.bridgeId}`,
+        );
+      }
+      if (this.options.autoProvisionEndpoints === false) {
+        return config;
+      }
+
+      const update: BridgeFeedEndpointUpdate = virtualBridgeInputDeviceSelection();
+      return this.options.api.putFeedEndpoint(
+        this.options.bridgeId,
+        mapping.talktomeFeedId,
+        update,
+      );
+    }
+
     const existing = config.ports.find(
       (port) => port.kind === 'user' && port.userId === mapping.talktomeUserId,
     );
@@ -1514,8 +1605,8 @@ export class TalktomeBridgeOrchestrator {
       existing?.kind === 'user' &&
       existing.trigger.mode === mapping.ptt.mode &&
       existing.trigger.thresholdDb === mapping.ptt.thresholdDb &&
-      existing.trigger.target?.type === mapping.target.type &&
-      existing.trigger.target?.id === mapping.target.id;
+      existing.trigger.target?.type === mapping.target?.type &&
+      existing.trigger.target?.id === mapping.target?.id;
     const devicesMatch =
       existing?.kind === 'user' && usesVirtualBridgeDevices(existing);
 
@@ -1539,8 +1630,8 @@ export class TalktomeBridgeOrchestrator {
 
     const update: BridgeUserEndpointUpdate = {
       triggerMode: mapping.ptt.mode,
-      triggerTargetType: mapping.target.type,
-      triggerTargetId: mapping.target.id,
+      triggerTargetType: mapping.target?.type ?? '',
+      triggerTargetId: mapping.target?.id ?? null,
       triggerThresholdDb: mapping.ptt.thresholdDb,
       ...virtualBridgeDeviceSelection(),
     };
@@ -1555,6 +1646,7 @@ export class TalktomeBridgeOrchestrator {
     config: Awaited<ReturnType<BridgeApi['getConfig']>>,
     mapping: TalktomeAccountMapping,
   ): void {
+    if (isFeedMapping(mapping)) return;
     const port = config.ports.find(
       (candidate) =>
         candidate.kind === 'user' && candidate.userId === mapping.talktomeUserId,
@@ -1565,11 +1657,11 @@ export class TalktomeBridgeOrchestrator {
     if (
       !port.triggerTargets.some(
         (target) =>
-          target.type === mapping.target.type && target.id === mapping.target.id,
+          target.type === mapping.target?.type && target.id === mapping.target?.id,
       )
     ) {
       throw new Error(
-        `Target ${mapping.target.type}:${mapping.target.id} is not allowed for talktome user ${mapping.talktomeUserId}`,
+        `Target ${mapping.target?.type}:${mapping.target?.id} is not allowed for talktome user ${mapping.talktomeUserId}`,
       );
     }
   }
@@ -1766,9 +1858,11 @@ function mappingRequiresRestart(
 ): boolean {
   return (
     previous.key !== next.key ||
+    previous.endpointKind !== next.endpointKind ||
     previous.talktomeUserId !== next.talktomeUserId ||
-    previous.target.type !== next.target.type ||
-    previous.target.id !== next.target.id ||
+    previous.talktomeFeedId !== next.talktomeFeedId ||
+    previous.target?.type !== next.target?.type ||
+    previous.target?.id !== next.target?.id ||
     previous.mixLocalCallers !== next.mixLocalCallers ||
     previous.bitrateBps !== next.bitrateBps ||
     previous.ptt.mode !== next.ptt.mode ||

@@ -4,6 +4,7 @@ import type {
   TalktomeAccountMapping,
   TalktomeAccountMappingInput,
   TalktomeBridgeConfig,
+  TalktomeEndpointKind,
   TalktomePttConfig,
   TalktomeTallyConfig,
   TalktomeTarget,
@@ -13,6 +14,7 @@ export type {
   TalktomeAccountMapping,
   TalktomeAccountMappingInput,
   TalktomeBridgeConfig,
+  TalktomeEndpointKind,
   TalktomePttConfig,
   TalktomePttMode,
   TalktomeTallyConfig,
@@ -120,6 +122,7 @@ export function validateTalktomeBridgeConfig(value: unknown): TalktomeBridgeConf
   const accounts: Record<string, TalktomeAccountMapping> = {};
   const contextKeys = new Map<string, string>();
   const userIds = new Map<number, string>();
+  const feedIds = new Map<number, string>();
   for (const [rawUri, rawMapping] of Object.entries(value.accounts)) {
     let accountUri: string;
     try {
@@ -143,13 +146,24 @@ export function validateTalktomeBridgeConfig(value: unknown): TalktomeBridgeConf
     } else {
       contextKeys.set(mapping.key, accountUri);
     }
-    const userOwner = userIds.get(mapping.talktomeUserId);
-    if (userOwner) {
-      issues.push(
-        `accounts.${rawUri}.talktomeUserId duplicates ${mapping.talktomeUserId} used by ${userOwner}`,
-      );
+    if (isFeedMapping(mapping)) {
+      const feedOwner = feedIds.get(mapping.talktomeFeedId);
+      if (feedOwner) {
+        issues.push(
+          `accounts.${rawUri}.talktomeFeedId duplicates ${mapping.talktomeFeedId} used by ${feedOwner}`,
+        );
+      } else {
+        feedIds.set(mapping.talktomeFeedId, accountUri);
+      }
     } else {
-      userIds.set(mapping.talktomeUserId, accountUri);
+      const userOwner = userIds.get(mapping.talktomeUserId);
+      if (userOwner) {
+        issues.push(
+          `accounts.${rawUri}.talktomeUserId duplicates ${mapping.talktomeUserId} used by ${userOwner}`,
+        );
+      } else {
+        userIds.set(mapping.talktomeUserId, accountUri);
+      }
     }
     accounts[accountUri] = mapping;
   }
@@ -420,6 +434,16 @@ export function getTalktomeBridgeConfigManager(
   return singleton;
 }
 
+export function isFeedMapping(
+  mapping: TalktomeAccountMapping,
+): mapping is TalktomeAccountMapping & {
+  endpointKind: 'feed';
+  talktomeFeedId: number;
+  target: null;
+} {
+  return mapping.endpointKind === 'feed';
+}
+
 function normalizeMapping(
   value: unknown,
   location: string,
@@ -434,7 +458,9 @@ function normalizeMapping(
     [
       'enabled',
       'key',
+      'endpointKind',
       'talktomeUserId',
+      'talktomeFeedId',
       'target',
       'ptt',
       'tally',
@@ -447,10 +473,35 @@ function normalizeMapping(
     issues,
   );
 
+  const endpointKind = normalizeEndpointKind(
+    value.endpointKind,
+    `${location}.endpointKind`,
+    issues,
+  );
   const userId = positiveInteger(value.talktomeUserId);
-  if (!userId) issues.push(`${location}.talktomeUserId must be a positive integer`);
+  const feedId = positiveInteger(value.talktomeFeedId);
+  if (endpointKind === 'user' && !userId) {
+    issues.push(`${location}.talktomeUserId must be a positive integer`);
+  }
+  if (endpointKind === 'feed' && !feedId) {
+    issues.push(`${location}.talktomeFeedId must be a positive integer`);
+  }
+  if (endpointKind === 'user' && value.talktomeFeedId !== undefined) {
+    issues.push(`${location}.talktomeFeedId is only supported for feed endpoints`);
+  }
+  if (endpointKind === 'feed' && value.talktomeUserId !== undefined) {
+    issues.push(`${location}.talktomeUserId is only supported for user endpoints`);
+  }
 
-  let key = value.key === undefined ? (userId ? String(userId) : '') : '';
+  const defaultKey =
+    endpointKind === 'feed'
+      ? feedId
+        ? `feed-${feedId}`
+        : ''
+      : userId
+        ? String(userId)
+        : '';
+  let key = value.key === undefined ? defaultKey : '';
   if (value.key !== undefined) {
     if (typeof value.key === 'string') key = value.key.trim();
     else issues.push(`${location}.key must be a string`);
@@ -465,7 +516,10 @@ function normalizeMapping(
     );
   }
 
-  const target = normalizeTarget(value.target, `${location}.target`, issues);
+  const target =
+    endpointKind === 'feed'
+      ? normalizeFeedTarget(value.target, `${location}.target`, issues)
+      : normalizeTarget(value.target, `${location}.target`, issues);
   const ptt = normalizePtt(value.ptt, `${location}.ptt`, issues);
   const tally = normalizeTally(value.tally, `${location}.tally`, issues);
   if (value.enabled !== undefined && typeof value.enabled !== 'boolean') {
@@ -501,9 +555,11 @@ function normalizeMapping(
   }
 
   if (
-    userId === undefined ||
+    endpointKind === undefined ||
+    (endpointKind === 'user' && userId === undefined) ||
+    (endpointKind === 'feed' && feedId === undefined) ||
     !key ||
-    !target ||
+    target === undefined ||
     !ptt ||
     !tally ||
     bitrateBps === undefined
@@ -519,8 +575,10 @@ function normalizeMapping(
           ? value.enabled
           : TALKTOME_ACCOUNT_DEFAULTS.enabled,
     key,
-    talktomeUserId: userId,
-    target,
+    endpointKind,
+    ...(endpointKind === 'feed'
+      ? { talktomeFeedId: feedId as number, target: null }
+      : { talktomeUserId: userId as number, target: target as TalktomeTarget }),
     ptt,
     tally,
     mixLocalCallers:
@@ -539,9 +597,19 @@ function validateInputMapping(
   input: TalktomeAccountMappingInput,
   accountUri: string,
 ): TalktomeAccountMapping {
+  const endpointKind = input.endpointKind ?? 'user';
   const raw: Record<string, unknown> = {
     ...input,
-    key: input.key ?? String(input.talktomeUserId),
+    endpointKind,
+    key:
+      input.key ??
+      (endpointKind === 'feed'
+        ? input.talktomeFeedId === undefined
+          ? undefined
+          : `feed-${input.talktomeFeedId}`
+        : input.talktomeUserId === undefined
+          ? undefined
+          : String(input.talktomeUserId)),
     ptt: {
       mode: input.ptt?.mode ?? TALKTOME_ACCOUNT_DEFAULTS.pttMode,
       thresholdDb: input.ptt?.thresholdDb ?? TALKTOME_ACCOUNT_DEFAULTS.thresholdDb,
@@ -554,6 +622,17 @@ function validateInputMapping(
   const mapping = normalizeMapping(raw, `accounts.${accountUri}`, issues);
   if (!mapping || issues.length) throw new TalktomeConfigValidationError(issues);
   return mapping;
+}
+
+function normalizeEndpointKind(
+  value: unknown,
+  location: string,
+  issues: string[],
+): TalktomeEndpointKind | undefined {
+  if (value === undefined) return 'user';
+  if (value === 'user' || value === 'feed') return value;
+  issues.push(`${location} must be user or feed`);
+  return undefined;
 }
 
 function normalizeTarget(
@@ -574,6 +653,16 @@ function normalizeTarget(
   return (value.type === 'conference' || value.type === 'user') && id
     ? { type: value.type, id }
     : undefined;
+}
+
+function normalizeFeedTarget(
+  value: unknown,
+  location: string,
+  issues: string[],
+): null | undefined {
+  if (value === undefined || value === null) return null;
+  issues.push(`${location} must be null for feed endpoints`);
+  return undefined;
 }
 
 function normalizePtt(
@@ -716,7 +805,7 @@ function errorMessage(error: unknown): string {
 function cloneMapping(mapping: TalktomeAccountMapping): TalktomeAccountMapping {
   return {
     ...mapping,
-    target: { ...mapping.target },
+    target: mapping.target ? { ...mapping.target } : null,
     ptt: { ...mapping.ptt },
     tally: { ...mapping.tally },
   };

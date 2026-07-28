@@ -10,7 +10,7 @@
           TalkToMe Bridge
         </h3>
         <p class="mt-1 text-sm text-gray-400">
-          Route configured SIP accounts to TalkToMe users and conferences.
+          Route configured SIP accounts to TalkToMe users, conferences, or feeds.
         </p>
       </div>
       <button
@@ -194,10 +194,10 @@
 
           <dl class="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
             <div>
-              <dt class="text-xs uppercase tracking-wide text-gray-500">User endpoint</dt>
-              <dd class="mt-1 text-gray-200">{{ userPortLabel(entry.mapping.talktomeUserId) }}</dd>
+              <dt class="text-xs uppercase tracking-wide text-gray-500">Endpoint</dt>
+              <dd class="mt-1 text-gray-200">{{ endpointLabel(entry.mapping) }}</dd>
             </div>
-            <div>
+            <div v-if="!isFeedMapping(entry.mapping)">
               <dt class="text-xs uppercase tracking-wide text-gray-500">Target</dt>
               <dd class="mt-1 text-gray-200">{{ targetLabel(entry.mapping.target) }}</dd>
             </div>
@@ -206,10 +206,15 @@
               <dd class="mt-1 break-all font-mono text-xs text-gray-200">{{ entry.mapping.key }}</dd>
             </div>
             <div>
-              <dt class="text-xs uppercase tracking-wide text-gray-500">PTT</dt>
+              <dt class="text-xs uppercase tracking-wide text-gray-500">{{ isFeedMapping(entry.mapping) ? 'Feed mode' : 'PTT' }}</dt>
               <dd class="mt-1 text-gray-200">
-                {{ entry.mapping.ptt.mode === 'audio-level' ? `${entry.mapping.ptt.thresholdDb} dB` : `External GPI ${entry.mapping.ptt.gpi}` }}
-                · {{ entry.mapping.ptt.holdMs }} ms
+                <template v-if="isFeedMapping(entry.mapping)">
+                  Send-only, streams while the SIP call is up
+                </template>
+                <template v-else>
+                  {{ entry.mapping.ptt.mode === 'audio-level' ? `${entry.mapping.ptt.thresholdDb} dB` : `External GPI ${entry.mapping.ptt.gpi}` }}
+                  · {{ entry.mapping.ptt.holdMs }} ms
+                </template>
               </dd>
             </div>
           </dl>
@@ -222,15 +227,15 @@
               </p>
             </div>
             <div class="rounded bg-gray-900/60 px-3 py-2">
-              <p class="text-xs text-gray-500">PTT / Live</p>
+              <p class="text-xs text-gray-500">{{ isFeedMapping(entry.mapping) ? 'TX stream' : 'PTT / Live' }}</p>
               <p
                 class="mt-0.5 text-sm font-medium"
                 :class="runtimeStatusFor(entry.accountUri)?.pttLive ? 'text-green-400' : 'text-gray-300'"
               >
-                {{ runtimeStatusFor(entry.accountUri)?.pttLive ? 'Live' : 'Idle' }}
+                {{ runtimeStatusFor(entry.accountUri)?.pttLive ? (isFeedMapping(entry.mapping) ? 'Streaming' : 'Live') : 'Idle' }}
               </p>
             </div>
-            <div class="rounded bg-gray-900/60 px-3 py-2">
+            <div v-if="!isFeedMapping(entry.mapping)" class="rounded bg-gray-900/60 px-3 py-2">
               <p class="text-xs text-gray-500">PTT lock</p>
               <p
                 class="mt-0.5 text-sm font-medium"
@@ -361,39 +366,50 @@
               </div>
 
               <div>
-                <label for="talktome-user-port" class="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-400">
-                  TalkToMe user endpoint
+                <label for="talktome-endpoint" class="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-400">
+                  TalkToMe endpoint
                 </label>
                 <select
-                  v-if="userPorts.length"
-                  id="talktome-user-port"
-                  v-model="form.talktomeUserId"
+                  v-if="endpointOptions.length"
+                  id="talktome-endpoint"
+                  :value="endpointValue"
                   required
                   class="w-full rounded bg-gray-700 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  @change="applyUserPortDefaults"
+                  @change="setEndpointFromValue(($event.target as HTMLSelectElement).value)"
                 >
-                  <option v-for="port in userPorts" :key="port.id" :value="port.userId">
-                    {{ port.label }} (user {{ port.userId }}){{ port.enabled ? '' : ' — disabled' }}
+                  <option v-for="port in endpointOptions" :key="`${port.kind}:${port.id}`" :value="endpointOptionValue(port)">
+                    {{ endpointOptionLabel(port) }}{{ port.enabled ? '' : ' — disabled' }}
                   </option>
                   <option
-                    v-if="form.talktomeUserId && !selectedUserPort"
-                    :value="form.talktomeUserId"
+                    v-if="endpointFallbackValue && !selectedEndpointPort"
+                    :value="endpointFallbackValue"
                   >
-                    User {{ form.talktomeUserId }} — not reported by server
+                    {{ endpointFallbackLabel }} — not reported by server
                   </option>
                 </select>
-                <input
-                  v-else
-                  id="talktome-user-port"
-                  v-model.number="form.talktomeUserId"
-                  type="number"
-                  required
-                  min="1"
-                  step="1"
-                  inputmode="numeric"
-                  class="w-full rounded bg-gray-700 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                <p v-if="selectedUserPort && !selectedUserPort.enabled" class="mt-1 text-xs text-yellow-300">
+                <div v-else class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <select
+                    id="talktome-endpoint"
+                    v-model="form.endpointKind"
+                    class="w-full rounded bg-gray-700 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    @change="applyEndpointDefaults"
+                  >
+                    <option value="user">User endpoint</option>
+                    <option value="feed">Feed endpoint</option>
+                  </select>
+                  <input
+                    v-model.number="endpointId"
+                    :aria-label="form.endpointKind === 'feed' ? 'TalkToMe feed ID' : 'TalkToMe user ID'"
+                    type="number"
+                    required
+                    min="1"
+                    step="1"
+                    inputmode="numeric"
+                    class="w-full rounded bg-gray-700 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    @input="applyEndpointDefaults"
+                  >
+                </div>
+                <p v-if="selectedEndpointPort && !selectedEndpointPort.enabled" class="mt-1 text-xs text-yellow-300">
                   This server endpoint is currently disabled.
                 </p>
               </div>
@@ -438,7 +454,14 @@
               </div>
             </div>
 
-            <fieldset class="rounded-lg border border-gray-700 p-4">
+            <div
+              v-if="isFeedForm"
+              class="rounded-lg border border-blue-700/60 bg-blue-900/20 px-4 py-3 text-sm text-blue-100"
+            >
+              Feeds are send-only; SIP audio streams into the selected feed while the call is up.
+            </div>
+
+            <fieldset v-if="!isFeedForm" class="rounded-lg border border-gray-700 p-4">
               <legend class="px-1 text-sm font-medium text-white">Conference or user target</legend>
               <div v-if="targetOptions.length">
                 <label for="talktome-target" class="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-400">
@@ -488,7 +511,7 @@
               </div>
             </fieldset>
 
-            <fieldset class="rounded-lg border border-gray-700 p-4">
+            <fieldset v-if="!isFeedForm" class="rounded-lg border border-gray-700 p-4">
               <legend class="px-1 text-sm font-medium text-white">Push-to-talk</legend>
               <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <div>
@@ -666,9 +689,12 @@ import type {
   TalktomeAccountMapping,
   TalktomeAccountMappingInput,
   TalktomeBridgeConfigResponse,
+  TalktomeFeedAccountMapping,
   TalktomeBridgeGlobalStatus,
+  TalktomeBridgeServerFeedPort,
   TalktomeBridgeServerUserPort,
   TalktomeBridgeStatus,
+  TalktomeEndpointKind,
   TalktomePttMode,
   TalktomeTarget,
   TalktomeTargetType,
@@ -689,7 +715,9 @@ type MappingForm = {
   accountUri: string;
   enabled: boolean;
   key: string;
+  endpointKind: TalktomeEndpointKind;
   talktomeUserId: number;
+  talktomeFeedId: number;
   targetType: TalktomeTargetType;
   targetId: number;
   pttMode: TalktomePttMode;
@@ -730,7 +758,9 @@ const form = reactive<MappingForm>({
   accountUri: '',
   enabled: true,
   key: '',
+  endpointKind: 'user',
   talktomeUserId: 0,
+  talktomeFeedId: 0,
   targetType: 'conference',
   targetId: 0,
   pttMode: 'audio-level',
@@ -748,6 +778,13 @@ const currentGlobalStatus = computed(
 );
 
 const userPorts = computed(() => server.value?.userPorts ?? []);
+const feedPorts = computed(() => server.value?.feedPorts ?? []);
+const endpointOptions = computed<Array<TalktomeBridgeServerUserPort | TalktomeBridgeServerFeedPort>>(
+  () => [
+    ...userPorts.value,
+    ...feedPorts.value,
+  ],
+);
 
 const configuredAccounts = computed(() =>
   props.accounts
@@ -775,12 +812,53 @@ const mappingEntries = computed<MappingEntry[]>(() =>
     ),
 );
 
-const selectedUserPort = computed(() =>
-  userPorts.value.find(port => port.userId === Number(form.talktomeUserId)),
+const isFeedForm = computed(() => form.endpointKind === 'feed');
+
+const endpointValue = computed(() =>
+  form.endpointKind === 'feed'
+    ? `feed:${Number(form.talktomeFeedId) || ''}`
+    : `user:${Number(form.talktomeUserId) || ''}`,
+);
+
+const endpointFallbackValue = computed(() => {
+  if (form.endpointKind === 'feed' && Number(form.talktomeFeedId) > 0) {
+    return `feed:${Number(form.talktomeFeedId)}`;
+  }
+  if (form.endpointKind === 'user' && Number(form.talktomeUserId) > 0) {
+    return `user:${Number(form.talktomeUserId)}`;
+  }
+  return '';
+});
+
+const endpointFallbackLabel = computed(() =>
+  form.endpointKind === 'feed'
+    ? `Feed ${Number(form.talktomeFeedId) || ''}`
+    : `User ${Number(form.talktomeUserId) || ''}`,
+);
+
+const endpointId = computed({
+  get: () =>
+    form.endpointKind === 'feed' ? form.talktomeFeedId : form.talktomeUserId,
+  set: (value: number) => {
+    if (form.endpointKind === 'feed') form.talktomeFeedId = Number(value);
+    else form.talktomeUserId = Number(value);
+  },
+});
+
+const selectedEndpointPort = computed(() =>
+  endpointOptions.value.find(port =>
+    port.kind === form.endpointKind &&
+    (port.kind === 'feed'
+      ? port.feedId === Number(form.talktomeFeedId)
+      : port.userId === Number(form.talktomeUserId)),
+  ),
 );
 
 const targetOptions = computed(
-  () => selectedUserPort.value?.triggerTargets ?? [],
+  () =>
+    selectedEndpointPort.value?.kind === 'user'
+      ? selectedEndpointPort.value.triggerTargets
+      : [],
 );
 
 const targetValue = computed(
@@ -817,17 +895,19 @@ function openAdd() {
   void loadConfig().then(() => {
     const account = availableAccounts.value[0];
     if (!account) return;
-    const port = preferredUserPort(userPorts.value);
+    const port = preferredEndpoint(endpointOptions.value);
     const target = preferredTarget(port);
     Object.assign(form, {
       accountUri: account.uri,
       enabled: true,
-      key: port ? String(port.userId) : '',
-      talktomeUserId: port?.userId ?? 0,
+      key: port ? defaultEndpointKey(port) : '',
+      endpointKind: port?.kind ?? 'user',
+      talktomeUserId: port?.kind === 'user' ? port.userId : 0,
+      talktomeFeedId: port?.kind === 'feed' ? port.feedId : 0,
       targetType: target?.type ?? 'conference',
       targetId: target?.id ?? 0,
-      pttMode: port?.trigger.mode ?? 'audio-level',
-      thresholdDb: port?.trigger.thresholdDb ?? -45,
+      pttMode: port?.kind === 'user' ? port.trigger.mode : 'audio-level',
+      thresholdDb: port?.kind === 'user' ? port.trigger.thresholdDb : -45,
       holdMs: 300,
       gpi: 1,
       activeGpo: '',
@@ -847,9 +927,11 @@ function openEdit(accountUri: string, mapping: TalktomeAccountMapping) {
     accountUri,
     enabled: mapping.enabled,
     key: mapping.key,
-    talktomeUserId: mapping.talktomeUserId,
-    targetType: mapping.target.type,
-    targetId: mapping.target.id,
+    endpointKind: mapping.endpointKind ?? 'user',
+    talktomeUserId: mapping.talktomeUserId ?? 0,
+    talktomeFeedId: mapping.talktomeFeedId ?? 0,
+    targetType: mapping.target?.type ?? 'conference',
+    targetId: mapping.target?.id ?? 0,
     pttMode: mapping.ptt.mode,
     thresholdDb: mapping.ptt.thresholdDb,
     holdMs: mapping.ptt.holdMs,
@@ -871,15 +953,29 @@ function closeModal() {
   modalError.value = '';
 }
 
-function applyUserPortDefaults() {
-  const port = selectedUserPort.value;
+function applyEndpointDefaults() {
+  const port = selectedEndpointPort.value;
   if (!port) {
-    if (!contextKeyTouched.value) form.key = String(form.talktomeUserId || '');
+    if (!contextKeyTouched.value) {
+      form.key =
+        form.endpointKind === 'feed'
+          ? form.talktomeFeedId
+            ? `feed-${form.talktomeFeedId}`
+            : ''
+          : String(form.talktomeUserId || '');
+    }
     return;
   }
   if (!contextKeyTouched.value) {
-    form.key = String(port.userId);
+    form.key = defaultEndpointKey(port);
   }
+  if (port.kind === 'feed') {
+    form.endpointKind = 'feed';
+    form.talktomeFeedId = port.feedId;
+    return;
+  }
+  form.endpointKind = 'user';
+  form.talktomeUserId = port.userId;
   form.pttMode = port.trigger.mode;
   form.thresholdDb = port.trigger.thresholdDb;
   const target = port.trigger.target ?? port.triggerTargets[0];
@@ -887,6 +983,18 @@ function applyUserPortDefaults() {
     form.targetType = target.type;
     form.targetId = target.id;
   }
+}
+
+function setEndpointFromValue(value: string) {
+  const [kind, rawId] = value.split(':');
+  const id = Number(rawId);
+  if ((kind !== 'user' && kind !== 'feed') || !Number.isSafeInteger(id) || id < 1) {
+    return;
+  }
+  form.endpointKind = kind;
+  if (kind === 'feed') form.talktomeFeedId = id;
+  else form.talktomeUserId = id;
+  applyEndpointDefaults();
 }
 
 function setTargetFromValue(value: string) {
@@ -972,11 +1080,16 @@ function formPayload(): TalktomeAccountMappingInput {
   return {
     enabled: form.enabled,
     key: form.key.trim(),
-    talktomeUserId: Number(form.talktomeUserId),
-    target: {
-      type: form.targetType,
-      id: Number(form.targetId),
-    },
+    endpointKind: form.endpointKind,
+    ...(form.endpointKind === 'feed'
+      ? { talktomeFeedId: Number(form.talktomeFeedId), target: null }
+      : {
+          talktomeUserId: Number(form.talktomeUserId),
+          target: {
+            type: form.targetType,
+            id: Number(form.targetId),
+          },
+        }),
     ptt: {
       mode: form.pttMode,
       thresholdDb: Number(form.thresholdDb),
@@ -999,8 +1112,13 @@ function mappingPayload(
   return {
     enabled,
     key: mapping.key,
-    talktomeUserId: mapping.talktomeUserId,
-    target: { ...mapping.target },
+    endpointKind: mapping.endpointKind ?? 'user',
+    ...(isFeedMapping(mapping)
+      ? { talktomeFeedId: mapping.talktomeFeedId, target: null }
+      : {
+          talktomeUserId: mapping.talktomeUserId,
+          target: mapping.target ? { ...mapping.target } : null,
+        }),
     ptt: { ...mapping.ptt },
     tally: { ...mapping.tally },
     mixLocalCallers: mapping.mixLocalCallers,
@@ -1010,7 +1128,17 @@ function mappingPayload(
 
 function validateForm(): string {
   if (!form.accountUri.trim()) return 'Select a configured SIP account.';
-  if (!Number.isSafeInteger(Number(form.talktomeUserId)) || Number(form.talktomeUserId) < 1) {
+  if (form.endpointKind === 'feed') {
+    if (
+      !Number.isSafeInteger(Number(form.talktomeFeedId)) ||
+      Number(form.talktomeFeedId) < 1
+    ) {
+      return 'TalkToMe feed endpoint must be a positive integer.';
+    }
+  } else if (
+    !Number.isSafeInteger(Number(form.talktomeUserId)) ||
+    Number(form.talktomeUserId) < 1
+  ) {
     return 'TalkToMe user endpoint must be a positive integer.';
   }
   if (
@@ -1020,17 +1148,19 @@ function validateForm(): string {
   ) {
     return 'Context key must be 1–120 characters and contain only letters, numbers, _, ., :, @, or -.';
   }
-  if (!Number.isSafeInteger(Number(form.targetId)) || Number(form.targetId) < 1) {
-    return 'Target ID must be a positive integer.';
-  }
-  const allowedTargets = targetOptions.value;
-  if (
-    allowedTargets.length &&
-    !allowedTargets.some(
-      target => target.type === form.targetType && target.id === Number(form.targetId),
-    )
-  ) {
-    return 'Select a target allowed for this TalkToMe user endpoint.';
+  if (!isFeedForm.value) {
+    if (!Number.isSafeInteger(Number(form.targetId)) || Number(form.targetId) < 1) {
+      return 'Target ID must be a positive integer.';
+    }
+    const allowedTargets = targetOptions.value;
+    if (
+      allowedTargets.length &&
+      !allowedTargets.some(
+        target => target.type === form.targetType && target.id === Number(form.targetId),
+      )
+    ) {
+      return 'Select a target allowed for this TalkToMe user endpoint.';
+    }
   }
   if (
     !Number.isFinite(Number(form.thresholdDb)) ||
@@ -1096,12 +1226,25 @@ function accountName(accountUri: string): string {
   );
 }
 
-function userPortLabel(userId: number): string {
-  const port = userPorts.value.find(candidate => candidate.userId === userId);
-  return port ? `${port.label} (${userId})` : String(userId);
+function isFeedMapping(
+  mapping: TalktomeAccountMapping,
+): mapping is TalktomeFeedAccountMapping {
+  return (mapping.endpointKind ?? 'user') === 'feed';
 }
 
-function targetLabel(target: TalktomeTarget): string {
+function endpointLabel(mapping: TalktomeAccountMapping): string {
+  if (isFeedMapping(mapping)) {
+    const feedId = mapping.talktomeFeedId ?? 0;
+    const port = feedPorts.value.find(candidate => candidate.feedId === feedId);
+    return port ? `${port.label} (feed ${feedId})` : `Feed ${feedId}`;
+  }
+  const userId = mapping.talktomeUserId ?? 0;
+  const port = userPorts.value.find(candidate => candidate.userId === userId);
+  return port ? `${port.label} (user ${userId})` : `User ${userId}`;
+}
+
+function targetLabel(target: TalktomeTarget | null): string {
+  if (!target) return 'None';
   const portTarget = userPorts.value
     .flatMap(port => port.triggerTargets)
     .find(candidate => candidate.type === target.type && candidate.id === target.id);
@@ -1110,16 +1253,38 @@ function targetLabel(target: TalktomeTarget): string {
     : `${capitalize(target.type)} ${target.id}`;
 }
 
-function preferredUserPort(
-  ports: TalktomeBridgeServerUserPort[],
-): TalktomeBridgeServerUserPort | undefined {
+function endpointOptionValue(
+  port: TalktomeBridgeServerUserPort | TalktomeBridgeServerFeedPort,
+): string {
+  return port.kind === 'feed' ? `feed:${port.feedId}` : `user:${port.userId}`;
+}
+
+function endpointOptionLabel(
+  port: TalktomeBridgeServerUserPort | TalktomeBridgeServerFeedPort,
+): string {
+  return port.kind === 'feed'
+    ? `${port.label} (feed ${port.feedId})`
+    : `${port.label} (user ${port.userId})`;
+}
+
+function defaultEndpointKey(
+  port: TalktomeBridgeServerUserPort | TalktomeBridgeServerFeedPort,
+): string {
+  return port.kind === 'feed' ? `feed-${port.feedId}` : String(port.userId);
+}
+
+function preferredEndpoint(
+  ports: Array<TalktomeBridgeServerUserPort | TalktomeBridgeServerFeedPort>,
+): TalktomeBridgeServerUserPort | TalktomeBridgeServerFeedPort | undefined {
   return ports.find(port => port.enabled) ?? ports[0];
 }
 
 function preferredTarget(
-  port: TalktomeBridgeServerUserPort | undefined,
+  port: TalktomeBridgeServerUserPort | TalktomeBridgeServerFeedPort | undefined,
 ): TalktomeTarget | undefined {
-  return port?.trigger.target ?? port?.triggerTargets[0];
+  return port?.kind === 'user'
+    ? port.trigger.target ?? port.triggerTargets[0]
+    : undefined;
 }
 
 function phaseDotClass(phase?: string): string {

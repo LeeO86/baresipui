@@ -15,6 +15,7 @@ export interface Account {
 
 export type TalktomeTargetType = 'conference' | 'user';
 export type TalktomePttMode = 'audio-level' | 'external';
+export type TalktomeEndpointKind = 'user' | 'feed';
 
 export interface TalktomeTarget {
   type: TalktomeTargetType;
@@ -34,11 +35,9 @@ export interface TalktomeTallyConfig {
   liveGpo?: number;
 }
 
-export interface TalktomeAccountMapping {
+interface TalktomeAccountMappingBase {
   enabled: boolean;
   key: string;
-  talktomeUserId: number;
-  target: TalktomeTarget;
   ptt: TalktomePttConfig;
   tally: TalktomeTallyConfig;
   mixLocalCallers: boolean;
@@ -47,6 +46,24 @@ export interface TalktomeAccountMapping {
   previousAudioPlayer: string;
 }
 
+export interface TalktomeUserAccountMapping extends TalktomeAccountMappingBase {
+  endpointKind: 'user';
+  talktomeUserId: number;
+  talktomeFeedId?: never;
+  target: TalktomeTarget;
+}
+
+export interface TalktomeFeedAccountMapping extends TalktomeAccountMappingBase {
+  endpointKind: 'feed';
+  talktomeUserId?: never;
+  talktomeFeedId: number;
+  target: null;
+}
+
+export type TalktomeAccountMapping =
+  | TalktomeUserAccountMapping
+  | TalktomeFeedAccountMapping;
+
 export interface TalktomeBridgeConfig {
   accounts: Record<string, TalktomeAccountMapping>;
 }
@@ -54,8 +71,10 @@ export interface TalktomeBridgeConfig {
 export interface TalktomeAccountMappingInput {
   enabled?: boolean;
   key?: string;
-  talktomeUserId: number;
-  target: TalktomeTarget;
+  endpointKind?: TalktomeEndpointKind;
+  talktomeUserId?: number;
+  talktomeFeedId?: number;
+  target?: TalktomeTarget | null;
   ptt?: Partial<TalktomePttConfig>;
   tally?: TalktomeTallyConfig;
   mixLocalCallers?: boolean;
@@ -108,6 +127,7 @@ export interface TalktomeBridgeGlobalStatus {
 
 export interface TalktomeBridgeServerUserPort {
   id: string;
+  kind: 'user';
   userId: number;
   label: string;
   enabled: boolean;
@@ -119,6 +139,19 @@ export interface TalktomeBridgeServerUserPort {
   triggerTargets: Array<TalktomeTarget & { name: string }>;
 }
 
+export interface TalktomeBridgeServerFeedPort {
+  id: string;
+  kind: 'feed';
+  feedId: number;
+  label: string;
+  enabled: boolean;
+  input: {
+    deviceId: string;
+    leftChannel: number;
+    rightChannel: number;
+  };
+}
+
 export interface TalktomeBridgeConfigResponse {
   enabled: boolean;
   globalStatus: TalktomeBridgeGlobalStatus;
@@ -128,6 +161,7 @@ export interface TalktomeBridgeConfigResponse {
     bridgeId: string;
     revision: string;
     userPorts: TalktomeBridgeServerUserPort[];
+    feedPorts: TalktomeBridgeServerFeedPort[];
   } | null;
 }
 
