@@ -278,7 +278,9 @@ function parseMediasoupBridgeCommandResponse(
     return;
   }
 
-  // Periodic ms_bridge_stat replies are high-frequency; keep a compact debug line.
+  // Periodic ms_bridge_stat replies are high-frequency; keep a compact debug
+  // line and omit the full payload so Socket.IO logBatch does not rebroadcast
+  // large JSON objects every poll interval.
   if (isRecord(payload.tx) && 'packets' in payload.tx) {
     const tx = payload.tx;
     const packets = typeof tx.packets === 'number' ? tx.packets : '?';
@@ -292,8 +294,6 @@ function parseMediasoupBridgeCommandResponse(
       'debug',
       'mediasoup-bridge',
       `mediasoup ${key}: stat calls=${calls} tx_packets=${packets} level=${level}${muted} rx_sources=${rx}`,
-      undefined,
-      payload,
     );
     return;
   }

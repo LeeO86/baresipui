@@ -157,6 +157,21 @@ describe('baresip mediasoup command response parsing', () => {
     ).toEqual({ remaining: '' });
 
     expect(warnMessages(state)).toEqual([]);
+    const statLog = state
+      .getLogs(1000)
+      .find(
+        (entry) =>
+          entry.source === 'mediasoup-bridge' &&
+          entry.message.includes('stat calls='),
+      );
+    expect(statLog).toEqual(
+      expect.objectContaining({
+        level: 'debug',
+        message:
+          'mediasoup 13: stat calls=1 tx_packets=1002 level=-96.0 dBFS muted rx_sources=1',
+      }),
+    );
+    expect(statLog?.data).toBeUndefined();
     expect(
       state
         .getLogs(1000)
