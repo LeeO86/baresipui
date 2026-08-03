@@ -269,6 +269,8 @@ docker compose -f compose.build-from-source.yaml up -d
 | `TALKTOME_BRIDGE_COMMAND_TIMEOUT_MS` | `5000` | Baresip bridge-command timeout in milliseconds (`100`–`120000`) |
 | `TALKTOME_DEFAULT_AUDIO_SOURCE` | empty | Safe source restored when no previous non-bridge device was recorded |
 | `TALKTOME_DEFAULT_AUDIO_PLAYER` | empty | Safe player restored when no previous non-bridge device was recorded |
+| `TALKTOME_TESTED_VERSION` | `1.1.3` | Highest talktome release this image/runtime was verified against; warns in the UI when the connected server reports a newer `appVersion` |
+| `TALKTOME_SERVER_VERSION` | empty | Optional known server version when health/announce do not expose `appVersion` yet |
 
 The talktome connection settings and every secret are app-only startup
 settings. Nuxt public runtime configuration uses the `NUXT_PUBLIC_*` name,

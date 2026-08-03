@@ -97,6 +97,8 @@ receives no API credentials.
 | `TALKTOME_BRIDGE_COMMAND_TIMEOUT_MS` | `5000` | No | ctrl_tcp module-command timeout in milliseconds; valid range is `100`–`120000`. |
 | `TALKTOME_DEFAULT_AUDIO_SOURCE` | empty | No | Source restored if an account has no recorded previous non-bridge source. |
 | `TALKTOME_DEFAULT_AUDIO_PLAYER` | empty | No | Player restored if an account has no recorded previous non-bridge player. |
+| `TALKTOME_TESTED_VERSION` | `1.1.3` | No | Highest talktome server release this bridge build was verified against. Bakeable as a Docker build `ARG`/`ENV`; override at runtime if needed. When the connected server reports a newer `appVersion`, the UI shows a warning. |
+| `TALKTOME_SERVER_VERSION` | empty | No | Optional known server version used only when health/announce omit `appVersion` (as of talktome v1.1.3). Prefer leaving empty so the live probe wins when available. |
 
 The compose files pass every connection setting and secret only to `app` and
 explicitly default the global gate to `false`. They derive the browser-safe
@@ -106,6 +108,34 @@ and recreates the process that may contain a dynamically loaded module.
 Configure the four required connection values before setting the gate to
 `true`. A partially configured enabled deployment fails the bridge plugin
 closed.
+
+### Compatibility and server version warning
+
+This bridge is verified against **talktome v1.1.3**. The Bridge Plain-RTP HTTP
+API used by baresipui is unchanged from v1.1.1 for our call path (`announce`,
+sessions, producers/consumers, talk-state, and `retainOnly` active-producer
+delivery). Operator-only additions in v1.1.3 (per-member conference listen
+controls, left-hand mode) do not affect the bridge agent.
+
+The release-note “version check” in talktome v1.1.3 is their packaging CI
+(synchronizing Bridge client metadata and verifying macOS/Windows installer
+versions). Separately, this app records `TALKTOME_TESTED_VERSION` and compares
+it to the connected server:
+
+1. Prefer `appVersion` / `serverVersion` / `version` on
+   `POST /api/v1/bridge/announce` when present.
+2. Otherwise read `appVersion` from `GET /api/v1/health` when present (same
+   field name as `/admin/status`).
+3. Otherwise use optional `TALKTOME_SERVER_VERSION` when an operator already
+   knows the server build (for example from the talktome admin status page).
+
+If the server is strictly newer than `TALKTOME_TESTED_VERSION`, Settings shows
+a warning and the bridge logs a warn line. Equal or older versions do not warn.
+As of talktome v1.1.3, `/api/v1/health` still returns only `{ ok, serverStartedAt }`
+and announce does not include `appVersion` (version is on admin status only), so
+auto-detection stays quiet until the server exposes one of those fields—or until
+`TALKTOME_SERVER_VERSION` is set. Bumping `TALKTOME_TESTED_VERSION` after
+re-verifying a newer release suppresses the warning again.
 
 Nuxt public runtime configuration is separate from the server setting: a
 runtime browser override must use the `NUXT_PUBLIC_*` name. Changing only a

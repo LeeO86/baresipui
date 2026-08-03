@@ -121,6 +121,12 @@ export interface TalktomeBridgeGlobalStatus {
   phase: TalktomeBridgeGlobalPhase;
   baresipConnected: boolean;
   serverReachable: boolean;
+  /** Highest talktome release this bridge build/runtime was tested against. */
+  testedVersion?: string;
+  /** talktome server version reported by health/announce when available. */
+  serverVersion?: string;
+  /** True when serverVersion is strictly newer than testedVersion. */
+  serverNewerThanTested?: boolean;
   lastError?: string;
   updatedAt: number;
 }
