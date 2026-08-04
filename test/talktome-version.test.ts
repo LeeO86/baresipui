@@ -6,6 +6,8 @@ import {
   isTalktomeServerNewerThanTested,
   normalizeTalktomeVersionLabel,
   parseTalktomeVersion,
+  resolveComparableTalktomeVersion,
+  resolveTalktomeTestedVersion,
 } from '~/server/services/talktome/version';
 
 describe('talktome version helpers', () => {
@@ -46,5 +48,21 @@ describe('talktome version helpers', () => {
       extractTalktomeAppVersion({ serverVersion: '1.1.3', version: 'ignored' }),
     ).toBe('1.1.3');
     expect(extractTalktomeAppVersion({ ok: true })).toBeUndefined();
+    expect(extractTalktomeAppVersion({ appVersion: 'dev' })).toBeUndefined();
+  });
+
+  it('rejects non-comparable labels for tested/server overrides', () => {
+    expect(resolveComparableTalktomeVersion('dev')).toBeUndefined();
+    expect(resolveComparableTalktomeVersion('v1.1.3')).toBe('1.1.3');
+
+    const invalid: string[] = [];
+    expect(
+      resolveTalktomeTestedVersion('dev', (value, fallback) => {
+        invalid.push(`${value}->${fallback}`);
+      }),
+    ).toBe('1.1.3');
+    expect(invalid).toEqual(['dev->1.1.3']);
+    expect(resolveTalktomeTestedVersion('1.2.0')).toBe('1.2.0');
+    expect(resolveTalktomeTestedVersion(undefined)).toBe('1.1.3');
   });
 });

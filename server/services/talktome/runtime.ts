@@ -33,7 +33,8 @@ import { withTalktomeAccountLifecycleLock } from './account-lifecycle-lock';
 import {
   DEFAULT_TALKTOME_TESTED_VERSION,
   isTalktomeServerNewerThanTested,
-  normalizeTalktomeVersionLabel,
+  resolveComparableTalktomeVersion,
+  resolveTalktomeTestedVersion,
 } from './version';
 
 export interface TalktomeBridgeRuntimeOptions {
@@ -82,17 +83,25 @@ export class TalktomeBridgeRuntime {
   private serverVersion?: string;
   private serverNewerThanTested = false;
   private loggedNewerServerWarning = false;
+  /** True after one health probe for this connection (avoids announce-interval spam). */
+  private healthVersionProbeDone = false;
 
   constructor(private readonly options: TalktomeBridgeRuntimeOptions) {
     validateOptions(options);
     this.authMode = options.authMode === 'api-key' ? 'api-key' : 'bearer';
     this.commandTimeoutMs = validateCommandTimeout(options.commandTimeoutMs);
-    this.testedVersion =
-      normalizeTalktomeVersionLabel(options.testedVersion || '') ||
-      DEFAULT_TALKTOME_TESTED_VERSION;
-    this.serverVersionOverride =
-      normalizeTalktomeVersionLabel(options.serverVersionOverride || '') ||
-      undefined;
+    this.testedVersion = resolveTalktomeTestedVersion(
+      options.testedVersion,
+      (invalid, fallback) =>
+        stateManager.addLog(
+          'warn',
+          'talktome-bridge',
+          `Ignoring invalid TALKTOME_TESTED_VERSION "${invalid}"; using ${fallback}`,
+        ),
+    );
+    this.serverVersionOverride = resolveComparableTalktomeVersion(
+      options.serverVersionOverride,
+    );
     this.configManager = getTalktomeBridgeConfigManager(options.configPath);
   }
 
@@ -286,7 +295,12 @@ export class TalktomeBridgeRuntime {
           onTally: (update) => this.handleTally(update),
           onAnnouncement: (announcement) => {
             this.remoteConfig = announcement.config;
-            void this.refreshServerVersion(client, announcement.appVersion);
+            // Periodic announce keep-alives should not re-hit /health when the
+            // server still omits appVersion (talktome v1.1.3). Only refresh when
+            // announce itself carries a version; startup probes once below.
+            if (announcement.appVersion) {
+              void this.refreshServerVersion(client, announcement.appVersion);
+            }
           },
           onError: (error, accountUri) => this.reportError(error, accountUri),
         },
@@ -332,6 +346,7 @@ export class TalktomeBridgeRuntime {
     this.serverVersion = undefined;
     this.serverNewerThanTested = false;
     this.loggedNewerServerWarning = false;
+    this.healthVersionProbeDone = false;
     this.setGlobalStatus('waiting-baresip', false);
     const orchestrator = this.orchestrator;
     this.orchestrator = undefined;
@@ -601,12 +616,12 @@ export class TalktomeBridgeRuntime {
     client: TalktomeBridgeHttpClient,
     announcedVersion?: string,
   ): Promise<void> {
-    let next =
-      normalizeTalktomeVersionLabel(announcedVersion || '') || undefined;
-    if (!next) {
+    let next = resolveComparableTalktomeVersion(announcedVersion);
+    if (!next && !this.healthVersionProbeDone) {
+      this.healthVersionProbeDone = true;
       try {
         const health = await client.getHealth();
-        next = health.appVersion;
+        next = resolveComparableTalktomeVersion(health.appVersion);
       } catch {
         // Health is best-effort; keep any previously observed version.
       }

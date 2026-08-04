@@ -81,11 +81,34 @@ export function extractTalktomeAppVersion(
   for (const key of ['appVersion', 'serverVersion', 'version'] as const) {
     const candidate = value[key];
     if (typeof candidate === 'string') {
-      const normalized = normalizeTalktomeVersionLabel(candidate);
-      if (normalized) return normalized;
+      const resolved = resolveComparableTalktomeVersion(candidate);
+      if (resolved) return resolved;
     }
   }
   return undefined;
+}
+
+/**
+ * Accept only labels that `parseTalktomeVersion` understands so comparisons
+ * cannot silently disable the newer-server warning.
+ */
+export function resolveComparableTalktomeVersion(
+  value: string | undefined,
+): string | undefined {
+  const normalized = normalizeTalktomeVersionLabel(value || '');
+  if (!normalized || !parseTalktomeVersion(normalized)) return undefined;
+  return normalized;
+}
+
+export function resolveTalktomeTestedVersion(
+  value: string | undefined,
+  onInvalid?: (invalid: string, fallback: string) => void,
+): string {
+  const normalized = normalizeTalktomeVersionLabel(value || '');
+  if (!normalized) return DEFAULT_TALKTOME_TESTED_VERSION;
+  if (parseTalktomeVersion(normalized)) return normalized;
+  onInvalid?.(normalized, DEFAULT_TALKTOME_TESTED_VERSION);
+  return DEFAULT_TALKTOME_TESTED_VERSION;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

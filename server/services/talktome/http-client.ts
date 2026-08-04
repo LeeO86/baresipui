@@ -148,8 +148,10 @@ export class TalktomeBridgeHttpClient implements BridgeApi {
   }
 
   /**
-   * Unauthenticated liveness probe. Prefer `appVersion` here when the server
-   * exposes it (same field name as `/admin/status`).
+   * GET /api/v1/health does not require auth on current talktome servers.
+   * This client still sends the configured bridge credentials, matching other
+   * BridgeApi calls. Prefer `appVersion` here when the server exposes it
+   * (same field name as `/admin/status`).
    */
   getHealth(): Promise<BridgeHealthResponse> {
     return this.requestJson('GET', '/api/v1/health', undefined, parseHealth);
