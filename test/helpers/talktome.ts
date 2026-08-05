@@ -231,7 +231,10 @@ export function makeBridgeHarness(
         port: makeUserPort(mapping),
       };
     }),
-    deleteSession: vi.fn(async () => ({ ok: true })),
+    deleteSession: vi.fn(async (sessionId: string) => {
+      streams.delete(sessionId);
+      return { ok: true };
+    }),
     heartbeat: vi.fn(async () => ({ ok: true })),
     pollEvents: vi.fn(async () => []),
     openEventStream: vi.fn(async (sessionId: string) => {

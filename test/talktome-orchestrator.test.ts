@@ -42,6 +42,11 @@ function createOrchestrator(
   harness: ReturnType<typeof makeBridgeHarness>,
   callbacks: TalktomeBridgeOrchestratorCallbacks = {},
   enabled = true,
+  intervals: {
+    heartbeatIntervalMs?: number;
+    eventPollIntervalMs?: number;
+    eventReconcileIntervalMs?: number;
+  } = {},
 ): TalktomeBridgeOrchestrator {
   const orchestrator = new TalktomeBridgeOrchestrator({
     enabled,
@@ -49,9 +54,9 @@ function createOrchestrator(
     api: asBridgeApi(harness.api),
     module: asModule(harness.module),
     mappings: harness.mappings,
-    heartbeatIntervalMs: 120_000,
-    eventPollIntervalMs: 1_000,
-    eventReconcileIntervalMs: 1_000,
+    heartbeatIntervalMs: intervals.heartbeatIntervalMs ?? 120_000,
+    eventPollIntervalMs: intervals.eventPollIntervalMs ?? 1_000,
+    eventReconcileIntervalMs: intervals.eventReconcileIntervalMs ?? 1_000,
     callbacks,
   });
   orchestrators.push(orchestrator);
@@ -796,6 +801,142 @@ describe('TalktomeBridgeOrchestrator', () => {
         ([, request]) => request.talking,
       ),
     ).toHaveLength(1);
+  });
+
+  it('recreates a live feed session when TalkToMe reports the session missing', async () => {
+    const feedMapping = makeMapping({
+      endpointKind: 'feed',
+      key: 'feed-1',
+      talktomeFeedId: 1,
+    });
+    const harness = makeBridgeHarness({ [ACCOUNT_URI]: feedMapping });
+    const orchestrator = createOrchestrator(harness, {}, true, {
+      heartbeatIntervalMs: 1_000,
+    });
+    await orchestrator.initialize();
+    await orchestrator.callEstablished(ACCOUNT_URI, 'call-1');
+    await harness.waitForStream('session-feed-1');
+
+    expect(orchestrator.getStatus(ACCOUNT_URI)).toMatchObject({
+      phase: 'connected',
+      pttLive: true,
+      sessionId: 'session-feed-1',
+      activeCallIds: ['call-1'],
+    });
+
+    const absent = Object.assign(
+      new Error('Bridge API POST failed: Bridge session not found'),
+      { status: 404 },
+    );
+    harness.api.heartbeat.mockRejectedValueOnce(absent);
+    harness.api.createSession.mockClear();
+    harness.module.openContext.mockClear();
+    harness.module.closeContext.mockClear();
+    harness.module.bindTransmit.mockClear();
+    harness.module.setTransmitMuted.mockClear();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushMicrotasks();
+
+    expect(harness.module.closeContext).toHaveBeenCalledWith('feed-1');
+    expect(orchestrator.getStatus(ACCOUNT_URI)).toMatchObject({
+      phase: 'failed',
+      activeCallIds: ['call-1'],
+      pttLive: false,
+    });
+    expect(orchestrator.getStatus(ACCOUNT_URI)).not.toHaveProperty('sessionId');
+    expect(harness.api.createSession).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await flushMicrotasks();
+    await harness.waitForStream('session-feed-1');
+
+    expect(harness.api.createSession).toHaveBeenCalledTimes(1);
+    expect(harness.module.openContext).toHaveBeenCalledWith('feed-1');
+    expect(harness.module.bindTransmit).toHaveBeenCalled();
+    expect(harness.module.setTransmitMuted).toHaveBeenCalledWith('feed-1', false);
+    expect(orchestrator.getStatus(ACCOUNT_URI)).toMatchObject({
+      phase: 'connected',
+      pttLive: true,
+      sessionId: 'session-feed-1',
+      activeCallIds: ['call-1'],
+    });
+  });
+
+  it('stays degraded on retryable heartbeat failures without recreating the session', async () => {
+    const harness = makeBridgeHarness({ [ACCOUNT_URI]: makeMapping() });
+    const orchestrator = createOrchestrator(harness, {}, true, {
+      heartbeatIntervalMs: 1_000,
+    });
+    await orchestrator.initialize();
+    await orchestrator.callEstablished(ACCOUNT_URI, 'call-1');
+    await harness.waitForStream('session-41');
+
+    harness.api.heartbeat.mockRejectedValueOnce(
+      Object.assign(new Error('Bridge API POST failed: HTTP 503'), {
+        status: 503,
+      }),
+    );
+    harness.api.createSession.mockClear();
+    harness.module.closeContext.mockClear();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushMicrotasks();
+
+    expect(orchestrator.getStatus(ACCOUNT_URI)).toMatchObject({
+      phase: 'degraded',
+      sessionId: 'session-41',
+      activeCallIds: ['call-1'],
+    });
+    expect(harness.module.closeContext).not.toHaveBeenCalled();
+    expect(harness.api.createSession).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await flushMicrotasks();
+    expect(harness.api.createSession).not.toHaveBeenCalled();
+    expect(orchestrator.getStatus(ACCOUNT_URI)?.sessionId).toBe('session-41');
+  });
+
+  it('recreates a user session after a poll/reconcile session-not-found error', async () => {
+    const harness = makeBridgeHarness({ [ACCOUNT_URI]: makeMapping() });
+    const orchestrator = createOrchestrator(harness, {}, true, {
+      heartbeatIntervalMs: 120_000,
+      eventReconcileIntervalMs: 1_000,
+    });
+    await orchestrator.initialize();
+    await orchestrator.callEstablished(ACCOUNT_URI, 'call-1');
+    await harness.waitForStream('session-41');
+
+    const absent = Object.assign(
+      new Error('Bridge API GET failed: Bridge session not found'),
+      { status: 404 },
+    );
+    harness.api.getActiveProducers.mockRejectedValueOnce(absent);
+    harness.api.createSession.mockClear();
+    harness.module.openContext.mockClear();
+    harness.module.closeContext.mockClear();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushMicrotasks();
+
+    expect(harness.module.closeContext).toHaveBeenCalledWith('studio');
+    expect(orchestrator.getStatus(ACCOUNT_URI)).toMatchObject({
+      phase: 'failed',
+      activeCallIds: ['call-1'],
+    });
+    expect(orchestrator.getStatus(ACCOUNT_URI)).not.toHaveProperty('sessionId');
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await flushMicrotasks();
+    await harness.waitForStream('session-41');
+
+    expect(harness.api.createSession).toHaveBeenCalledTimes(1);
+    expect(harness.module.openContext).toHaveBeenCalledWith('studio');
+    expect(orchestrator.getStatus(ACCOUNT_URI)).toMatchObject({
+      phase: 'connected',
+      sessionId: 'session-41',
+      activeCallIds: ['call-1'],
+    });
   });
 
   it('keeps a failed session deletion stopping until retry and replaces it only while calls remain', async () => {
