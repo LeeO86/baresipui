@@ -105,6 +105,15 @@ export interface BridgeAnnounceResponse {
   bridge: BridgeRegistryEntry;
   bridgeToken: string;
   config: BridgeRuntimeConfig;
+  /** Present when the server includes app/server version on announce. */
+  appVersion?: string;
+}
+
+export interface BridgeHealthResponse {
+  ok: boolean;
+  serverStartedAt?: string;
+  /** Present when the server exposes appVersion on GET /api/v1/health. */
+  appVersion?: string;
 }
 
 /**
@@ -328,6 +337,7 @@ export interface BridgeOkResponse {
 
 export interface BridgeApi {
   announce(request: BridgeAnnounceRequest): Promise<BridgeAnnounceResponse>;
+  getHealth?(): Promise<BridgeHealthResponse>;
   getConfig(bridgeId: string): Promise<BridgeRuntimeConfig>;
   putUserEndpoint(
     bridgeId: string,

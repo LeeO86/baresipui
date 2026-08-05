@@ -83,6 +83,8 @@ export default defineNitroPlugin(async (nitroApp) => {
       authMode: environment.authMode,
       autoProvisionEndpoints: environment.autoProvisionEndpoints,
       commandTimeoutMs: environment.commandTimeoutMs,
+      testedVersion: environment.testedVersion,
+      serverVersionOverride: environment.serverVersionOverride || undefined,
     });
     setTalktomeBridgeRuntime(runtime);
     void runtime.start();

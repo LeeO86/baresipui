@@ -8,6 +8,7 @@ import type {
   BridgeConsumer,
   BridgeControlEvent,
   BridgeFeedEndpointUpdate,
+  BridgeHealthResponse,
   BridgeHeartbeatRequest,
   BridgeOkResponse,
   BridgePlainSendTransport,
@@ -23,6 +24,7 @@ import type {
   BridgeUserEndpointUpdate,
   JsonObject,
 } from './types';
+import { extractTalktomeAppVersion } from './version';
 
 export type BridgeAuthMode = 'bearer' | 'api-key';
 
@@ -143,6 +145,16 @@ export class TalktomeBridgeHttpClient implements BridgeApi {
       undefined,
       parseRuntimeConfig,
     );
+  }
+
+  /**
+   * GET /api/v1/health does not require auth on current talktome servers.
+   * This client still sends the configured bridge credentials, matching other
+   * BridgeApi calls. Prefer `appVersion` here when the server exposes it
+   * (same field name as `/admin/status`).
+   */
+  getHealth(): Promise<BridgeHealthResponse> {
+    return this.requestJson('GET', '/api/v1/health', undefined, parseHealth);
   }
 
   putUserEndpoint(
@@ -520,10 +532,24 @@ function responseError(
 
 function parseAnnounceResponse(value: unknown): BridgeAnnounceResponse {
   const object = expectRecord(value, 'announce response');
+  const appVersion = extractTalktomeAppVersion(object);
   return {
     bridge: expectRecord(object.bridge, 'announce bridge') as unknown as BridgeAnnounceResponse['bridge'],
     bridgeToken: expectString(object.bridgeToken, 'bridgeToken'),
     config: parseRuntimeConfig(object.config),
+    ...(appVersion ? { appVersion } : {}),
+  };
+}
+
+function parseHealth(value: unknown): BridgeHealthResponse {
+  const object = expectRecord(value, 'health response');
+  const appVersion = extractTalktomeAppVersion(object);
+  return {
+    ok: expectBoolean(object.ok, 'health ok'),
+    ...(typeof object.serverStartedAt === 'string' && object.serverStartedAt
+      ? { serverStartedAt: object.serverStartedAt }
+      : {}),
+    ...(appVersion ? { appVersion } : {}),
   };
 }
 

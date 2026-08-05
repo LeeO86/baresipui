@@ -15,6 +15,8 @@ const environmentNames = [
   'TALKTOME_BRIDGE_COMMAND_TIMEOUT_MS',
   'TALKTOME_DEFAULT_AUDIO_SOURCE',
   'TALKTOME_DEFAULT_AUDIO_PLAYER',
+  'TALKTOME_TESTED_VERSION',
+  'TALKTOME_SERVER_VERSION',
   'ACCOUNTS_CONFIG_PATH',
 ] as const;
 
@@ -34,6 +36,8 @@ describe('talktome runtime environment boundary', () => {
       configPath: '/config/talktome-bridge.json',
       accountsConfigPath: '/config/accounts',
       commandTimeoutMs: 5_000,
+      testedVersion: '1.1.3',
+      serverVersionOverride: '',
     });
 
     vi.stubEnv('TALKTOME_BRIDGE_ENABLED', 'true');
@@ -44,6 +48,8 @@ describe('talktome runtime environment boundary', () => {
     vi.stubEnv('TALKTOME_BRIDGE_CONFIG_PATH', '/tmp/runtime-config.json');
     vi.stubEnv('ACCOUNTS_CONFIG_PATH', '/tmp/runtime-accounts');
     vi.stubEnv('TALKTOME_BRIDGE_COMMAND_TIMEOUT_MS', '1234');
+    vi.stubEnv('TALKTOME_TESTED_VERSION', ' 1.1.4 ');
+    vi.stubEnv('TALKTOME_SERVER_VERSION', ' 1.1.5 ');
 
     expect(readTalktomeBridgeEnvironment()).toMatchObject({
       enabled: true,
@@ -54,6 +60,8 @@ describe('talktome runtime environment boundary', () => {
       configPath: '/tmp/runtime-config.json',
       accountsConfigPath: '/tmp/runtime-accounts',
       commandTimeoutMs: 1_234,
+      testedVersion: '1.1.4',
+      serverVersionOverride: '1.1.5',
     });
 
     vi.stubEnv('TALKTOME_BRIDGE_TOKEN', 'rotated-secret');

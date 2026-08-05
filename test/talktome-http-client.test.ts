@@ -121,6 +121,63 @@ describe('TalktomeBridgeHttpClient', () => {
     );
   });
 
+  it('captures optional appVersion from announce and health responses', async () => {
+    const mapping = makeMapping();
+    const config = {
+      bridgeId: 'bridge-main',
+      revision: 'r1',
+      ports: [makeUserPort(mapping)],
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          bridge: { id: 'bridge-main', name: 'baresipui' },
+          bridgeToken: 'session-token',
+          config,
+          appVersion: 'v1.1.4',
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          ok: true,
+          serverStartedAt: '2026-08-02T00:00:00.000Z',
+          appVersion: '1.1.5',
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          ok: true,
+          serverStartedAt: '2026-08-02T00:00:00.000Z',
+        }),
+      );
+    const client = new TalktomeBridgeHttpClient({
+      baseUrl: 'https://bridge.example.test',
+      token: 'token',
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(
+      client.announce({
+        bridgeId: 'bridge-main',
+        platform: 'linux',
+        inventory: { host: '192.0.2.4', devices: [] },
+      }),
+    ).resolves.toMatchObject({ appVersion: '1.1.4' });
+    await expect(client.getHealth()).resolves.toEqual({
+      ok: true,
+      serverStartedAt: '2026-08-02T00:00:00.000Z',
+      appVersion: '1.1.5',
+    });
+    await expect(client.getHealth()).resolves.toEqual({
+      ok: true,
+      serverStartedAt: '2026-08-02T00:00:00.000Z',
+    });
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      'https://bridge.example.test/api/v1/health',
+    );
+  });
+
   it('requires the active-producer wrapper and sends the consumer handshake with API-key auth', async () => {
     const producer = {
       peerId: 'peer-1',

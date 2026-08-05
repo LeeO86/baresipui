@@ -65,6 +65,18 @@
         >
           {{ currentGlobalStatus?.serverReachable ? 'Reachable' : 'Unavailable' }}
         </p>
+        <p
+          v-if="currentGlobalStatus?.serverVersion || currentGlobalStatus?.testedVersion"
+          class="mt-1 text-xs text-gray-400"
+        >
+          <span v-if="currentGlobalStatus?.serverVersion">
+            v{{ currentGlobalStatus.serverVersion }}
+          </span>
+          <span v-if="currentGlobalStatus?.testedVersion">
+            <span v-if="currentGlobalStatus?.serverVersion"> · </span>
+            tested {{ currentGlobalStatus.testedVersion }}
+          </span>
+        </p>
       </div>
     </div>
 
@@ -84,6 +96,21 @@
     >
       <p class="font-medium">Bridge error</p>
       <p class="mt-1 break-words">{{ currentGlobalStatus.lastError }}</p>
+    </div>
+
+    <div
+      v-if="currentGlobalStatus?.serverNewerThanTested"
+      role="alert"
+      class="rounded-lg border border-amber-700/70 bg-amber-900/30 px-4 py-3 text-sm text-amber-100"
+    >
+      <p class="font-medium">TalkToMe server is newer than this build was tested against</p>
+      <p class="mt-1 break-words">
+        Server reports
+        {{ currentGlobalStatus.serverVersion || 'an unknown version' }};
+        this bridge was tested against
+        {{ currentGlobalStatus.testedVersion || 'an unknown version' }}.
+        Bridge Plain-RTP may still work, but behavior can differ until we re-verify.
+      </p>
     </div>
 
     <div
