@@ -447,7 +447,12 @@ A talktome failure must not terminate or reject a SIP call:
 - An unmapped or disabled account keeps its normal audio devices.
 - API authentication, SSE/poll, provisioning, RTP handshake, and consumer
   errors are reported as bridge status/log errors.
-- On a mapped account, the agent tears down failed bridge resources without
+- When TalkToMe loses a control session (for example after a container
+  restart) and returns session-not-found / HTTP 404 on heartbeat or event
+  traffic, the agent tears down the stale bridge resources and recreates a
+  session while the SIP call stays up. Transient non-404 API errors stay
+  `degraded` and keep the existing session for retry.
+- On a mapped account, other failed bridge resources are torn down without
   ending the SIP call. Bridge audio may be silent; changing the account back
   to a normal audio device requires disabling/removing its mapping and
   restarting baresip.

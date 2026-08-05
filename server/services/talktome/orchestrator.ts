@@ -690,11 +690,15 @@ export class TalktomeBridgeOrchestrator {
           return;
         }
         if (runtime.phase === 'stopping' || runtime.phase === 'idle') return;
-        this.reportError(error, runtime.accountUri);
         void this.enqueue(runtime, async () => {
           if (!this.isCurrentSession(runtime, generation, sessionId, subscriber)) {
             return;
           }
+          if (runtime.phase === 'stopping' || runtime.phase === 'idle') return;
+          if (await this.recoverAbsentSession(runtime, error, source)) {
+            return;
+          }
+          this.reportError(error, runtime.accountUri);
           if (runtime.phase === 'connected') runtime.phase = 'degraded';
           runtime.lastError = `${source}: ${errorMessage(error)}`;
           this.emitStatus(runtime);
@@ -1247,6 +1251,9 @@ export class TalktomeBridgeOrchestrator {
     runtime: AccountRuntime,
     cause: unknown,
   ): Promise<void> {
+    if (await this.recoverAbsentSession(runtime, cause, 'event transport')) {
+      return;
+    }
     if (!isFeedMapping(runtime.mapping)) {
       await this.failClosedApiPtt(runtime, cause);
       return;
@@ -1295,11 +1302,47 @@ export class TalktomeBridgeOrchestrator {
         this.emitStatus(runtime);
       }
     } catch (error) {
+      if (await this.recoverAbsentSession(runtime, error, 'heartbeat')) {
+        return;
+      }
       runtime.phase = 'degraded';
       runtime.lastError = `heartbeat: ${errorMessage(error)}`;
       this.reportError(error, runtime.accountUri);
       this.emitStatus(runtime);
     }
+  }
+
+  /**
+   * TalkToMe wiped the control session (container restart, TTL, etc.). Tear
+   * down local bridge state and recreate while the SIP call stays up — same
+   * recovery shape as `session-kicked`, without waiting for a call cycle.
+   */
+  private async recoverAbsentSession(
+    runtime: AccountRuntime,
+    cause: unknown,
+    source: string,
+  ): Promise<boolean> {
+    if (!isSessionAbsentError(cause)) return false;
+    if (
+      runtime.phase === 'stopping' ||
+      runtime.phase === 'starting' ||
+      runtime.phase === 'idle'
+    ) {
+      return true;
+    }
+    if (!runtime.sessionId && !runtime.contextOpen) {
+      if (runtime.calls.size > 0) this.scheduleSetupRetry(runtime);
+      return true;
+    }
+
+    runtime.lastError = `${source}: ${errorMessage(cause)}; recreating session`;
+    this.reportError(cause, runtime.accountUri);
+    if (await this.teardownRuntime(runtime, 'session-absent')) {
+      runtime.phase = runtime.calls.size > 0 ? 'failed' : 'idle';
+      this.emitStatus(runtime);
+      this.scheduleSetupRetry(runtime);
+    }
+    return true;
   }
 
   private async teardownRuntime(
@@ -1953,8 +1996,17 @@ function isSessionAbsentError(error: unknown): boolean {
     status?: unknown;
     statusCode?: unknown;
     response?: { status?: unknown };
+    message?: unknown;
   };
-  return [candidate.status, candidate.statusCode, candidate.response?.status].some(
-    (status) => status === 404 || status === '404',
+  if (
+    [candidate.status, candidate.statusCode, candidate.response?.status].some(
+      (status) => status === 404 || status === '404',
+    )
+  ) {
+    return true;
+  }
+  return (
+    typeof candidate.message === 'string' &&
+    /session not found/i.test(candidate.message)
   );
 }
